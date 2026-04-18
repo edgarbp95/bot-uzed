@@ -4,10 +4,39 @@ require('dotenv').config();
 const Fastify = require('fastify');
 const { handleIncomingMessage } = require('./src/agent');
 const { sendMessage, verifyWebhookSignature } = require('./src/whatsapp');
+const {
+  validateJwt,
+  handleStaffSend,
+  handleStaffSetStatus,
+  handleStaffMarkRead,
+} = require('./src/staff');
 
 const fastify = Fastify({
   logger: { level: process.env.LOG_LEVEL || 'info' },
   bodyLimit: 1048576, // 1MB
+});
+
+// ── CORS para las rutas /staff/* (panel Angular) ──
+const ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+fastify.addHook('onRequest', async (request, reply) => {
+  const origin = request.headers.origin;
+  if (!request.url.startsWith('/staff')) return;
+
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Vary', 'Origin');
+    reply.header('Access-Control-Allow-Credentials', 'true');
+    reply.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    reply.header('Access-Control-Max-Age', '86400');
+  }
+  if (request.method === 'OPTIONS') {
+    return reply.code(204).send();
+  }
 });
 
 // Capturar raw body para validar la firma HMAC de Meta
@@ -110,6 +139,55 @@ fastify.post('/webhook', async (request, reply) => {
       fastify.log.error({ err: error }, 'Error processing webhook');
     }
   });
+});
+
+// ============================================================
+// /staff/* — endpoints para el panel Angular de uzed-health
+// ============================================================
+
+/** Extrae y valida el JWT del header Authorization: Bearer <jwt>. */
+async function requireAuth(request, reply) {
+  const auth = request.headers['authorization'] || request.headers['Authorization'];
+  const jwt = typeof auth === 'string' && auth.startsWith('Bearer ')
+    ? auth.slice(7).trim()
+    : null;
+  if (!jwt) {
+    reply.code(401).send({ error: 'missing_bearer_token' });
+    return null;
+  }
+  const user = await validateJwt(jwt);
+  if (!user) {
+    reply.code(401).send({ error: 'invalid_token' });
+    return null;
+  }
+  return user;
+}
+
+fastify.post('/staff/send', async (request, reply) => {
+  const user = await requireAuth(request, reply);
+  if (!user) return;
+
+  const { conversation_id: conversationId, text } = request.body || {};
+  const result = await handleStaffSend({ user, conversationId, text });
+  reply.code(result.status).send(result.ok ? result.data : { error: result.error, detail: result.detail });
+});
+
+fastify.post('/staff/set-status', async (request, reply) => {
+  const user = await requireAuth(request, reply);
+  if (!user) return;
+
+  const { conversation_id: conversationId, status } = request.body || {};
+  const result = await handleStaffSetStatus({ user, conversationId, status });
+  reply.code(result.status).send(result.ok ? result.data : { error: result.error });
+});
+
+fastify.post('/staff/mark-read', async (request, reply) => {
+  const user = await requireAuth(request, reply);
+  if (!user) return;
+
+  const { conversation_id: conversationId } = request.body || {};
+  const result = await handleStaffMarkRead({ user, conversationId });
+  reply.code(result.status).send(result.ok ? result.data : { error: result.error });
 });
 
 const start = async () => {
