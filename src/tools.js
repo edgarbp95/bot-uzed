@@ -95,6 +95,35 @@ function normalizeWhatsapp(raw) {
 }
 
 // ============================================================
+// Validadores de existencia — defensa contra UUIDs alucinados
+// ============================================================
+// El modelo LLM a veces inventa UUIDs en vez de llamar a la tool
+// que los devuelve. Estas helpers detectan ese caso y devuelven
+// un error claro que guía al modelo al siguiente paso correcto.
+
+async function providerExistsInOrg(organizationId, providerId) {
+  if (!providerId) return false;
+  const { data } = await supabase
+    .from('providers')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('id', providerId)
+    .maybeSingle();
+  return !!data;
+}
+
+async function patientExistsInOrg(organizationId, patientId) {
+  if (!patientId) return false;
+  const { data } = await supabase
+    .from('patients')
+    .select('id')
+    .eq('organization_id', organizationId)
+    .eq('id', patientId)
+    .maybeSingle();
+  return !!data;
+}
+
+// ============================================================
 // validateSlot interno — espejo de slot-generator.service.ts#validateSlot
 // ============================================================
 
@@ -372,6 +401,14 @@ const handlers = {
       return { error: 'no_branch_configured', mensaje: 'El canal de WhatsApp no tiene sucursal asignada.' };
     }
 
+    // 0) Validar que el provider realmente exista en esta org (defensa anti-alucinación)
+    if (!(await providerExistsInOrg(ctx.organizationId, provider_id))) {
+      return {
+        error: 'provider_no_encontrado',
+        mensaje: 'Ese profesional no existe. Llama a listar_profesionales para obtener IDs válidos.',
+      };
+    }
+
     // 1) Tipo de cita → duración
     const { data: apptType, error: errT } = await supabase
       .from('appointment_types')
@@ -380,7 +417,12 @@ const handlers = {
       .eq('id', appointment_type_id)
       .maybeSingle();
     if (errT) throw errT;
-    if (!apptType) return { error: 'tipo_cita_no_encontrado' };
+    if (!apptType) {
+      return {
+        error: 'tipo_cita_no_encontrado',
+        mensaje: 'Ese tipo de cita no existe. Llama a listar_tipos_cita para obtener IDs válidos.',
+      };
+    }
 
     const requiredMins = apptType.duration_minutes;
     const dayOfWeek = dayOfWeekInTz(fecha, tz);
@@ -610,6 +652,22 @@ const handlers = {
     const branchId = ctx.branchId;
     if (!branchId) return { error: 'no_branch_configured' };
 
+    // 0a) Validar provider (defensa anti-alucinación)
+    if (!(await providerExistsInOrg(ctx.organizationId, input.provider_id))) {
+      return {
+        error: 'provider_no_encontrado',
+        mensaje: 'Ese profesional no existe. Llama a listar_profesionales para obtener IDs válidos.',
+      };
+    }
+
+    // 0b) Validar paciente
+    if (!(await patientExistsInOrg(ctx.organizationId, input.patient_id))) {
+      return {
+        error: 'paciente_no_encontrado',
+        mensaje: 'Ese paciente no existe en la clínica. Llama a buscar_paciente o registrar_paciente.',
+      };
+    }
+
     // 1) Resolver tipo de cita → duración
     const { data: apptType, error: errT } = await supabase
       .from('appointment_types')
@@ -618,7 +676,12 @@ const handlers = {
       .eq('id', input.appointment_type_id)
       .maybeSingle();
     if (errT) throw errT;
-    if (!apptType) return { error: 'tipo_cita_no_encontrado' };
+    if (!apptType) {
+      return {
+        error: 'tipo_cita_no_encontrado',
+        mensaje: 'Ese tipo de cita no existe. Llama a listar_tipos_cita para obtener IDs válidos.',
+      };
+    }
 
     // 2) Calcular end_at desde duración
     const startDt = DateTime.fromISO(input.start_at);
