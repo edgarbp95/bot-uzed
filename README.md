@@ -1,135 +1,111 @@
-# bot-uzed — WhatsApp AI Bot para Uzed Health
+# bot-uzed — WhatsApp AI Bot (multi-tenant)
 
-Bot conversacional en WhatsApp para Uzed Health. Permite a pacientes consultar médicos, ver disponibilidad y agendar/cancelar citas de forma conversacional. Usa Claude Haiku como LLM y Supabase como base de datos.
+Bot conversacional para WhatsApp Cloud API que atiende pacientes de múltiples clínicas suscritas a **Uzed Health**. Una sola app Node.js sirve a muchas organizaciones: la org se identifica por el `phone_number_id` que Meta envía en cada webhook.
+
+## Arquitectura
+
+```
+Paciente → WhatsApp → Meta Cloud API → POST /webhook (bot-uzed)
+                                        ↓
+                    Lookup: phone_number_id → organization_whatsapp_channels
+                                        ↓
+                    Org + branch + service_line + timezone (desde Supabase)
+                                        ↓
+                    Upsert conversation (wa_upsert_conversation RPC)
+                                        ↓
+                    Guardar inbound en whatsapp_messages
+                                        ↓
+                    ¿Conversación en human_handoff? → no responder
+                                        ↓
+                    Agent loop (Gemini / Claude) con tools scoped a la org
+                                        ↓
+                    Enviar reply + guardar outbound
+```
+
+### Tablas Supabase (ver migración `20260418030000_whatsapp_channels_and_inbox.sql`)
+
+- `organization_whatsapp_channels` — mapea `phone_number_id` de Meta → organization/branch. Soporta modo `managed` (creds globales de Uzed) o `self_service` (creds propios de la org, cifrados).
+- `whatsapp_conversations` — hilo por (canal, whatsapp del paciente). Estados: `bot_active`, `human_handoff`, `closed`.
+- `whatsapp_messages` — historial completo (inbound + outbound), con idempotencia por `wamid`.
+- `patients.whatsapp` — columna nueva para match por número de WhatsApp (separado del `phone` de contacto).
 
 ## Stack
 
-- Node.js 22 + Fastify (HTTP server)
-- WhatsApp Cloud API (Meta)
-- Anthropic Claude Haiku 4.5 con tool use
-- Supabase (PostgreSQL + API)
+- **Runtime**: Node.js 22 + Fastify 5 (cPanel Passenger)
+- **DB**: Supabase (PostgreSQL + RLS) — cliente con `service_role` (el bot opera server-side)
+- **LLM**: configurable via `LLM_PROVIDER`
+  - `google` — Gemini 2.0 Flash (gratuito)
+  - `anthropic` — Claude Haiku 4.5 (de pago)
+- **TZ**: Luxon, con timezone leída de `organization_settings.timezone`
 
-## Estructura
+## Archivos
 
 ```
 bot-uzed/
-├── server.js                 # Entry point, webhook de WhatsApp
-├── package.json              # Dependencias
-├── .env.example              # Plantilla de variables de entorno
-├── .gitignore
-├── supabase-schema.sql       # Script SQL para crear las tablas
-├── README.md
-└── src/
-    ├── whatsapp.js           # Cliente WhatsApp Cloud API
-    ├── supabase.js           # Cliente Supabase
-    ├── conversations.js      # Historial de conversación en memoria
-    ├── tools.js              # Definiciones y handlers de las tools del agente
-    └── agent.js              # Loop del agente Claude con tool use
+├─ server.js              # Fastify + webhook Meta
+├─ src/
+│  ├─ agent.js            # Orquestador multi-tenant + agent loop
+│  ├─ tools.js            # 10 tools scoped por organization_id
+│  ├─ whatsapp.js         # Cliente HTTP WA Cloud API (multi-tenant)
+│  └─ supabase.js         # Supabase client (service_role)
+├─ .env.example           # Template de variables
+├─ .env                   # Variables reales (no commitear)
+└─ package.json
 ```
 
-## Despliegue en cPanel (paso a paso)
+## Tools disponibles (espejo de la app Angular)
 
-### 1. Crear las tablas en Supabase
+| Tool | Propósito |
+|---|---|
+| `listar_especialidades` | Especialidades activas, filtradas por `service_line` de la org |
+| `listar_profesionales` | Médicos/odontólogos/veterinarios (por la línea de la org) |
+| `listar_tipos_cita` | Tipos de consulta + duración en minutos |
+| `consultar_horarios_disponibles` | Slots libres para un día, usando `provider_schedules` + `provider_blocked_times` + `appointments` (igual que `slot-generator.service.ts`) |
+| `buscar_paciente` | Match por `(organization_id, whatsapp)` |
+| `registrar_paciente` | Crea paciente (humano o mascota en clínicas veterinarias) |
+| `agendar_cita` | Valida slot y crea appointment (calcula `end_at` desde `duration_minutes`) |
+| `consultar_citas_paciente` | Próximas citas del paciente |
+| `cancelar_cita` | Cancela (solo del propio paciente, scoped a la org) |
+| `escalar_a_humano` | Marca conversación como `human_handoff` — el bot deja de responder |
 
-1. Entra al dashboard de tu proyecto Supabase
-2. **SQL Editor** → **New Query**
-3. Pega el contenido de `supabase-schema.sql`
-4. Clic en **Run**
-5. Verifica en **Table Editor** que se crearon: `especialidades`, `medicos`, `horarios_medico`, `pacientes`, `citas`
-
-### 2. Subir el código a GitHub
-
-Desde tu máquina local (o subiendo archivos por la UI de GitHub):
+## Setup local
 
 ```bash
-git clone https://github.com/edgarbp95/bot-uzed.git
 cd bot-uzed
-# copia los archivos de este proyecto aquí
-git add .
-git commit -m "Initial bot implementation"
-git push origin main
+cp .env.example .env      # completar valores
+npm install
+npm start
 ```
 
-### 3. Traer el código al servidor cPanel
+Exponer con ngrok para desarrollo:
 
-En cPanel → **Git Version Control** → busca el repo `bot-uzed` → clic en **Manage** → pestaña **Pull or Deploy** → **Update from Remote**.
-
-Esto trae los archivos a `/home2/uzedsolutions/bot.uzedsolutions.com/`.
-
-### 4. Configurar variables de entorno
-
-En cPanel → **Setup Node.js App** → editar la app (ícono de lápiz) → sección **Environment variables** → agregar una por una las variables del `.env.example` con los valores reales:
-
-- `ANTHROPIC_API_KEY`
-- `WHATSAPP_ACCESS_TOKEN`
-- `WHATSAPP_PHONE_NUMBER_ID`
-- `WHATSAPP_VERIFY_TOKEN` (inventa un string aleatorio, ej: `uzed-bot-verify-2026`)
-- `WHATSAPP_APP_SECRET`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-
-Clic en **Save**.
-
-### 5. Instalar dependencias
-
-En el mismo panel de Setup Node.js App, clic en **Run NPM Install**. Espera a que termine (toma ~1-2 min).
-
-### 6. Reiniciar la app
-
-Clic en **Restart** para que tome las variables de entorno y el código nuevo.
-
-### 7. Verificar que está corriendo
-
-Abre `https://bot.uzedsolutions.com/` en el navegador. Debería devolver:
-
-```json
-{"status":"ok","service":"bot-uzed","time":"..."}
+```bash
+ngrok http 3000
+# Configurar en Meta: https://<ngrok-url>/webhook
 ```
 
-### 8. Configurar el webhook en Meta
+## Conectar una clínica (modo managed)
 
-1. En Meta for Developers → tu app → **WhatsApp → Configuración**
-2. En **Webhook**, clic en **Editar**
-3. **URL de devolución de llamada**: `https://bot.uzedsolutions.com/webhook`
-4. **Token de verificación**: el mismo string que pusiste en `WHATSAPP_VERIFY_TOKEN`
-5. Clic en **Verificar y guardar** — si sale OK, el webhook está conectado
-6. En **Campos de webhook**, suscríbete a **messages**
+```sql
+INSERT INTO public.organization_whatsapp_channels (
+  organization_id, branch_id, phone_number_id, waba_id,
+  display_phone_number, display_name, provisioning_mode, is_active
+) VALUES (
+  '<org-uuid>', '<branch-uuid>',
+  '1141615449030701',          -- del panel de Meta
+  '1169385901888483',
+  '+57 301 234 5678',
+  'Clínica Demo',
+  'managed', true
+);
+```
 
-### 9. Probar end-to-end
+El bot hace lookup por `phone_number_id` en cada webhook y responde con el token global (`WHATSAPP_ACCESS_TOKEN`).
 
-Desde tu WhatsApp personal (el que verificaste en "Para" de la configuración de API), envía un mensaje al número de prueba de Meta:
+## Capa 2 (futuro)
 
-- "Hola, ¿qué especialidades manejan?"
-- "Quiero agendar una cita con el Dr. Juan Pérez"
-
-El bot debería responder de forma natural.
-
-## Actualizar el bot después
-
-Cuando hagas cambios:
-
-1. `git push` desde tu máquina al repo de GitHub
-2. En cPanel → **Git Version Control** → **Update from Remote**
-3. Si cambiaron dependencias en `package.json`: **Run NPM Install**
-4. Clic en **Restart** en la app Node.js
-
-## Logs y debugging
-
-Los logs de Passenger están en `stderr.log` dentro de la carpeta de la app (verlos desde File Manager). Los logs de Fastify salen ahí también.
-
-## Próximos pasos sugeridos
-
-- Agregar Row Level Security (RLS) en Supabase para mayor seguridad
-- Persistir conversaciones en Supabase (actualmente viven en memoria del proceso)
-- Agregar plantillas de mensajes pre-aprobadas por Meta para recordatorios proactivos
-- Implementar rate limiting por número de WhatsApp
-- Verificar número de negocio real en Meta para quitar el sandbox
-
-## Cumplimiento
-
-Este bot procesa información potencialmente sensible (datos de pacientes y citas). Antes de producción:
-
-- Agrega aviso de privacidad y consentimiento explícito del paciente
-- Revisa regulaciones locales (NOM-024 en México, HIPAA en EE.UU., GDPR en UE)
-- Considera cifrado adicional de campos sensibles
-- Implementa logs de auditoría para accesos a datos
+- Inbox dentro de Uzed Health (Angular) para que el staff supervise/intervenga.
+- Realtime Supabase sobre `whatsapp_messages` para push.
+- Endpoint para "tomar" conversaciones (`POST /conversations/:id/handoff`).
+- Modo `self_service` con credenciales cifradas por org.
+- Mensajes multimedia (imágenes, audio, documentos).

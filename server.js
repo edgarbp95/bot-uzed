@@ -3,17 +3,14 @@
 require('dotenv').config();
 const Fastify = require('fastify');
 const { handleIncomingMessage } = require('./src/agent');
-const { verifyWebhookSignature } = require('./src/whatsapp');
+const { sendMessage, verifyWebhookSignature } = require('./src/whatsapp');
 
 const fastify = Fastify({
-  logger: {
-    level: process.env.LOG_LEVEL || 'info',
-  },
-  // We need the raw body to validate Meta's webhook signature
+  logger: { level: process.env.LOG_LEVEL || 'info' },
   bodyLimit: 1048576, // 1MB
 });
 
-// Capture raw body for signature verification
+// Capturar raw body para validar la firma HMAC de Meta
 fastify.addContentTypeParser(
   'application/json',
   { parseAs: 'string' },
@@ -29,11 +26,13 @@ fastify.addContentTypeParser(
 );
 
 // Health check
-fastify.get('/', async () => {
-  return { status: 'ok', service: 'bot-uzed', time: new Date().toISOString() };
-});
+fastify.get('/', async () => ({
+  status: 'ok',
+  service: 'bot-uzed',
+  time: new Date().toISOString(),
+}));
 
-// WhatsApp webhook verification (Meta calls this once via GET when you save the webhook URL)
+// GET /webhook — verificación one-time de Meta
 fastify.get('/webhook', async (request, reply) => {
   const mode = request.query['hub.mode'];
   const token = request.query['hub.verify_token'];
@@ -47,7 +46,7 @@ fastify.get('/webhook', async (request, reply) => {
   return reply.code(403).send('Forbidden');
 });
 
-// WhatsApp incoming messages
+// POST /webhook — mensajes entrantes
 fastify.post('/webhook', async (request, reply) => {
   const signature = request.headers['x-hub-signature-256'];
   const rawBody = request.rawBody || '';
@@ -57,40 +56,52 @@ fastify.post('/webhook', async (request, reply) => {
     return reply.code(403).send('Forbidden');
   }
 
-  // Acknowledge Meta within 20s or they'll retry
+  // Meta espera 200 en <20s — procesamos async
   reply.code(200).send('OK');
 
-  // Process asynchronously after responding
   setImmediate(async () => {
     try {
       const body = request.body;
       if (body.object !== 'whatsapp_business_account') return;
 
+      // Token global (modo managed). En self_service lo resolveremos por canal dentro del agent.
+      const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+
       for (const entry of body.entry || []) {
         for (const change of entry.changes || []) {
           if (change.field !== 'messages') continue;
           const value = change.value || {};
+          const phoneNumberId = value.metadata?.phone_number_id;
+          if (!phoneNumberId) continue;
+
           const messages = value.messages || [];
           const contacts = value.contacts || [];
 
           for (const message of messages) {
             const contact = contacts.find((c) => c.wa_id === message.from) || {};
-            const profileName = contact.profile && contact.profile.name;
+            const profileName = contact.profile?.name;
 
             if (message.type === 'text') {
               await handleIncomingMessage({
+                phoneNumberId,
                 from: message.from,
                 text: message.text.body,
                 messageId: message.id,
                 profileName,
+                accessToken,
               });
             } else {
-              // Unsupported message type (image, audio, etc.)
-              const { sendMessage } = require('./src/whatsapp');
-              await sendMessage(
-                message.from,
-                'Por ahora solo puedo procesar mensajes de texto. ¿Me cuentas en palabras en qué te puedo ayudar?'
-              );
+              // Multimedia aún no soportado — responder amablemente
+              try {
+                await sendMessage({
+                  phoneNumberId,
+                  accessToken,
+                  to: message.from,
+                  text: 'Por ahora solo puedo procesar mensajes de texto. ¿Me cuentas en palabras en qué te puedo ayudar?',
+                });
+              } catch (e) {
+                fastify.log.error({ err: e }, 'Failed to send unsupported-type reply');
+              }
             }
           }
         }
