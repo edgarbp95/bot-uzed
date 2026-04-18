@@ -230,21 +230,32 @@ async function handleIncomingMessage({
   profileName,
   accessToken,
 }) {
+  // Estado diagnóstico — si el top-level catch dispara, lo usamos para
+  // persistir el error en whatsapp_messages y en conversations.last_message_preview.
+  let _channel = null;
+  let _conversationId = null;
+  let _step = 'init';
   try {
     // 1) Lookup canal → org
+    _step = 'lookupChannel';
     const channel = await lookupChannelByPhoneNumberId(phoneNumberId);
     if (!channel) {
       console.warn(`[bot] phone_number_id ${phoneNumberId} sin canal activo. Ignorando mensaje.`);
       return;
     }
+    _channel = channel;
+    console.log(`[bot] step=lookupChannel ok org=${channel.organization_id} branch=${channel.branch_id}`);
 
     // 2) Marcar como leído (best-effort, no bloquea)
     markAsRead({ phoneNumberId, accessToken, messageId }).catch(() => {});
 
     // 3) Org context (tz, service_line)
+    _step = 'loadOrgContext';
     const orgInfo = await loadOrgContext(channel.organization_id);
+    console.log(`[bot] step=loadOrgContext ok line=${orgInfo.serviceLine} tz=${orgInfo.timezone}`);
 
     // 4) Upsert conversación
+    _step = 'upsertConversation';
     const conversationId = await upsertConversation({
       channelId: channel.id,
       organizationId: channel.organization_id,
@@ -252,10 +263,14 @@ async function handleIncomingMessage({
       whatsapp: from,
       profileName,
     });
+    _conversationId = conversationId;
+    console.log(`[bot] step=upsertConversation ok conv=${conversationId}`);
 
+    _step = 'getConversation';
     const conv = await getConversation(conversationId);
 
     // 5) Guardar inbound siempre
+    _step = 'saveMessage(inbound)';
     await saveMessage({
       organizationId: channel.organization_id,
       branchId: channel.branch_id,
@@ -267,6 +282,7 @@ async function handleIncomingMessage({
       content: text,
       wamid: messageId,
     });
+    console.log(`[bot] step=saveMessage(inbound) ok`);
 
     // 6) Si está en handoff humano, no responder con bot
     if (conv?.status === 'human_handoff') {
@@ -284,25 +300,32 @@ async function handleIncomingMessage({
       conversationId,
     };
 
+    _step = 'buildSystemPrompt';
     const system = buildSystemPrompt({
       org: orgInfo,
       channel,
       ctx,
       profileName,
     });
+    console.log(`[bot] step=buildSystemPrompt ok len=${system.length}`);
 
     // 8) Cargar historial desde DB (incluye el inbound recién guardado)
+    _step = 'loadHistory';
     const history = await loadHistory(conversationId);
+    console.log(`[bot] step=loadHistory ok rows=${history.length}`);
 
     // 9) Run agent
+    _step = `runAgent(${getProvider()})`;
     let reply;
     if (getProvider() === 'anthropic') {
       reply = await runAgentAnthropic(history, system, ctx);
     } else {
       reply = await runAgentGemini(history, system, ctx);
     }
+    console.log(`[bot] step=runAgent ok replyLen=${(reply || '').length}`);
 
     // 10) Si la conversación fue escalada por una tool, no enviar reply final
+    _step = 'sendOutbound';
     const convAfter = await getConversation(conversationId);
     if (convAfter?.status === 'human_handoff') {
       // Si el bot generó algún mensaje de despedida (ej. "le aviso al equipo"), enviarlo
@@ -315,8 +338,38 @@ async function handleIncomingMessage({
     if (reply && reply.trim()) {
       await sendOutbound({ channel, ctx, conv: convAfter, accessToken, reply });
     }
+    console.log(`[bot] step=sendOutbound ok (flow complete)`);
   } catch (error) {
-    console.error('[bot] handleIncomingMessage error:', error);
+    const errMsg = `[${_step}] ${error?.message || String(error)}`;
+    const errStack = error?.stack || '';
+    console.error('[bot] handleIncomingMessage error:', _step, error);
+
+    // Persistir error en DB para poder diagnosticar sin stderr.log
+    if (_channel && _conversationId) {
+      try {
+        await supabase.from('whatsapp_messages').insert({
+          organization_id: _channel.organization_id,
+          branch_id: _channel.branch_id,
+          conversation_id: _conversationId,
+          channel_id: _channel.id,
+          direction: 'outbound',
+          author: 'system',
+          content_type: 'text',
+          content: '[ERROR INTERNO] ' + errMsg,
+          error: (errMsg + '\n' + errStack).slice(0, 4000),
+        });
+        await supabase
+          .from('whatsapp_conversations')
+          .update({
+            last_message_preview: `[ERROR] ${errMsg}`.slice(0, 200),
+            last_message_at: new Date().toISOString(),
+          })
+          .eq('id', _conversationId);
+      } catch (e) {
+        console.error('[bot] no pude persistir el error en DB:', e?.message);
+      }
+    }
+
     try {
       await sendMessage({
         phoneNumberId,

@@ -782,12 +782,26 @@ async function executeTool(name, input, ctx) {
 // ============================================================
 // Gemini format (parameters en vez de input_schema)
 // ============================================================
+//
+// Gemini v1beta rechaza function declarations con `properties: {}` vacío.
+// Para tools sin params, omitimos el campo `parameters` por completo.
+// También quitamos `required: []` cuando está vacío.
 
-const geminiTools = tools.map((t) => ({
-  name: t.name,
-  description: t.description,
-  parameters: t.input_schema,
-}));
+function toGeminiParameters(schema) {
+  if (!schema || !schema.properties || Object.keys(schema.properties).length === 0) {
+    return undefined; // tool sin parámetros
+  }
+  const out = { type: schema.type || 'object', properties: schema.properties };
+  if (schema.required && schema.required.length > 0) out.required = schema.required;
+  return out;
+}
+
+const geminiTools = tools.map((t) => {
+  const decl = { name: t.name, description: t.description };
+  const params = toGeminiParameters(t.input_schema);
+  if (params) decl.parameters = params;
+  return decl;
+});
 
 module.exports = {
   tools,
