@@ -190,13 +190,13 @@ const tools = [
   {
     name: 'listar_profesionales',
     description:
-      'Lista profesionales activos de la clínica, opcionalmente filtrados por especialidad. Para clínicas dentales devuelve odontólogos, para veterinarias veterinarios, etc.',
+      'Lista profesionales activos de la clínica con sus UUIDs reales. OBLIGATORIO llamar esta tool antes de consultar_horarios_disponibles o agendar_cita — es la ÚNICA forma válida de obtener un provider_id. Devuelve nombre completo, especialidad y id (UUID). Opcionalmente filtra por especialidad.',
     input_schema: {
       type: 'object',
       properties: {
         especialidad_id: {
           type: 'string',
-          description: 'UUID de la especialidad (opcional). Si se omite devuelve todos.',
+          description: 'UUID de la especialidad (opcional, obtenido de listar_especialidades). Si se omite devuelve todos.',
         },
       },
       required: [],
@@ -211,7 +211,7 @@ const tools = [
   {
     name: 'consultar_horarios_disponibles',
     description:
-      'Consulta horarios libres de un profesional para una fecha específica, considerando sus turnos, citas existentes y bloqueos. Devuelve los slots libres en lenguaje humano. Llámala UNA fecha a la vez (no rangos largos) para no saturar al paciente.',
+      'Consulta horarios libres de un profesional para una fecha específica. PRERREQUISITOS OBLIGATORIOS: provider_id debe venir de listar_profesionales (NO lo inventes), appointment_type_id debe venir de listar_tipos_cita (NO lo inventes). Si llamas con UUIDs inventados, la tool devuelve error provider_no_encontrado o tipo_cita_no_encontrado y deberás llamar primero la tool que te da ese UUID. Llama UNA fecha a la vez.',
     input_schema: {
       type: 'object',
       properties: {
@@ -266,7 +266,7 @@ const tools = [
   {
     name: 'agendar_cita',
     description:
-      'Agenda una cita. ANTES de llamar esto: (1) el paciente debe estar registrado, (2) el horario debe haber sido confirmado por el paciente. La función valida que el slot esté libre (turno activo, sin double-booking, sin bloqueo).',
+      'Agenda una cita. PRERREQUISITOS OBLIGATORIOS: patient_id debe venir de buscar_paciente o registrar_paciente (NO lo inventes), provider_id de listar_profesionales, appointment_type_id de listar_tipos_cita, start_at del campo start_at del slot devuelto por consultar_horarios_disponibles. El paciente ya debe haber confirmado explícitamente el horario. La función valida que el slot esté libre.',
     input_schema: {
       type: 'object',
       properties: {

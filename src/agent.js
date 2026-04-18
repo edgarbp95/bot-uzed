@@ -476,6 +476,11 @@ function buildCachedTools(toolList) {
   );
 }
 
+const FALLBACK_SILENT =
+  'Disculpa, tuve un problema procesando tu mensaje. ¿Podrías repetírmelo con más detalle? Si preferís, puedo pasarte con una persona del equipo.';
+const FALLBACK_MAX_TURNS =
+  'Disculpa, no logré completar tu solicitud en esta conversación. ¿Puedes reformularla, o preferís que te pase con una persona del equipo?';
+
 async function runAgentAnthropic(history, system, ctx) {
   const messages = history.map((m) => ({ role: m.role, content: m.content }));
   const cachedSystem = buildCachedSystem(system);
@@ -503,11 +508,22 @@ async function runAgentAnthropic(history, system, ctx) {
     const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
 
     if (response.stop_reason !== 'tool_use' || toolUseBlocks.length === 0) {
-      return response.content
+      const text = response.content
         .filter((b) => b.type === 'text')
         .map((b) => b.text)
         .join('\n')
         .trim();
+
+      // Defensa: si el modelo contestó vacío (lo que deja al paciente con
+      // solo el visto), devolvemos un fallback. stop_reason también lo
+      // informamos para diagnóstico.
+      if (!text) {
+        console.error(
+          `[anthropic] respuesta vacía stop_reason=${response.stop_reason} turn=${turn}`,
+        );
+        return FALLBACK_SILENT;
+      }
+      return text;
     }
 
     messages.push({ role: 'assistant', content: response.content });
@@ -528,7 +544,7 @@ async function runAgentAnthropic(history, system, ctx) {
     messages.push({ role: 'user', content: toolResults });
   }
 
-  return 'Disculpa, no logré completar tu solicitud. ¿Puedes reformularla?';
+  return FALLBACK_MAX_TURNS;
 }
 
 // ============================================================
