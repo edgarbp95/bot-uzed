@@ -766,16 +766,60 @@ const handlers = {
 };
 
 // ============================================================
-// Dispatcher
+// Dispatcher + trazabilidad a DB
 // ============================================================
+// Cada invocación queda registrada en `whatsapp_tool_invocations`
+// para poder diagnosticar alucinaciones y errores sin depender
+// del stderr.log de cPanel (Passenger no captura console.log).
+
+async function logInvocation({ ctx, tool, input, output, error, durationMs }) {
+  if (!ctx?.organizationId) return; // sin org no hay dónde loggear
+  try {
+    await supabase.from('whatsapp_tool_invocations').insert({
+      organization_id: ctx.organizationId,
+      conversation_id: ctx.conversationId || null,
+      tool,
+      input: input || null,
+      output: output || null,
+      error: error || null,
+      duration_ms: typeof durationMs === 'number' ? Math.round(durationMs) : null,
+    });
+  } catch (logErr) {
+    // No rompemos el flujo si falla el logging
+    console.error(`[tool-log] fallo insert para ${tool}:`, logErr?.message);
+  }
+}
 
 async function executeTool(name, input, ctx) {
-  if (!handlers[name]) return { error: `tool_desconocido: ${name}` };
+  const startedAt = Date.now();
+
+  if (!handlers[name]) {
+    const output = { error: `tool_desconocido: ${name}` };
+    await logInvocation({
+      ctx, tool: name, input, output, error: 'tool_desconocido',
+      durationMs: Date.now() - startedAt,
+    });
+    return output;
+  }
+
   try {
-    return await handlers[name](ctx, input || {});
+    const output = await handlers[name](ctx, input || {});
+    await logInvocation({
+      ctx, tool: name, input, output,
+      error: output && output.error ? String(output.error) : null,
+      durationMs: Date.now() - startedAt,
+    });
+    return output;
   } catch (err) {
+    const errMsg = err?.message || 'error_interno';
     console.error(`[tool ${name}] error:`, err);
-    return { error: err.message || 'error_interno' };
+    await logInvocation({
+      ctx, tool: name, input,
+      output: { error: errMsg },
+      error: `${errMsg}\n${err?.stack || ''}`.slice(0, 4000),
+      durationMs: Date.now() - startedAt,
+    });
+    return { error: errMsg };
   }
 }
 

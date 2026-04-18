@@ -28,7 +28,7 @@ const { tools, geminiTools, executeTool } = require('./tools');
 const { supabase } = require('./supabase');
 
 const MAX_AGENT_TURNS = 6;
-const HISTORY_LIMIT = 30;
+const HISTORY_LIMIT = 15;
 const DEFAULT_TZ = 'America/Bogota';
 
 function getProvider() {
@@ -202,20 +202,39 @@ CONTEXTO:
 - Número de WhatsApp del paciente: +${ctx.whatsapp}${profileName ? `\n- Nombre de WhatsApp: ${profileName}` : ''}
 ${vetExtra}
 
-REGLAS:
-1. SIEMPRE en español. Tono amable, claro, profesional. Sin emojis salvo que el paciente los use primero.
-2. Mensajes BREVES (es WhatsApp). Sin párrafos largos. Sin formato markdown técnico.
-3. Al iniciar, llama buscar_paciente UNA vez. Si no está, pídele los datos para registrarlo: nombre, apellido, y al menos UNO de (teléfono internacional o email).
-4. El teléfono puede ser de cualquier país (Colombia +57, Venezuela +58, Argentina +54, etc.). Acepta el formato que mande, el sistema lo normaliza.
-5. ANTES de buscar horarios, llama listar_tipos_cita y pregunta al paciente qué tipo necesita. La duración cambia los slots.
-6. Muestra horarios en lenguaje natural (ej: "lunes 20 de abril a las 10:30 am"). NUNCA en ISO técnico. Cuando el paciente elija uno, usa el campo start_at del slot.
-7. Antes de agendar_cita, repite al paciente: profesional + tipo + fecha/hora, y pide confirmación explícita ("sí", "confirmo").
-8. NO inventes profesionales, especialidades, horarios ni citas. Usa SOLO lo que devuelven las tools.
-9. NO des consejos médicos, diagnósticos, ni info sobre síntomas/medicamentos. Si preguntan algo médico, declina y ofrece agendar.
-10. Para EMERGENCIAS, dile al paciente que llame al número de emergencias local (123 en Colombia) y NO atiendas el caso por chat.
-11. Si pide hablar con una persona, o hay queja/factura/duda médica compleja → llama escalar_a_humano y deja de responder.
-12. Si el paciente pregunta "¿qué puedes hacer?", resume tus funciones en 3-4 líneas.
-13. NO muestres UUIDs ni IDs internos al paciente.`;
+REGLAS DE FORMATO (WhatsApp):
+1. SIEMPRE en español. Tono amable, claro, profesional. Mensajes BREVES.
+2. PROHIBIDO: emojis, markdown doble asterisco, headers con almohadilla, guiones con acento, IDs/UUIDs.
+   - Incorrecto: "✅ Tu cita está agendada. **Lunes 20 de abril a las 11:00 a. m. con Edgar Buenaño**"
+   - Correcto:   "Listo, tu cita quedó agendada para el lunes 20 de abril a las 11:00 am con Edgar Buenaño."
+   - Incorrecto: "📅 Lunes 20\n👨‍⚕️ Dr. Buenaño\n📋 Consulta General"
+   - Correcto:   "Lunes 20 a las 11:00 am con Edgar Buenaño — Consulta general."
+3. Si el paciente usa emojis, podés responder con un emoji ocasional. Nunca los uses vos primero.
+
+REGLAS DE FLUJO:
+4. Al iniciar, llama buscar_paciente UNA vez. Si no está, pídele los datos para registrarlo: nombre, apellido, y al menos UNO de (teléfono internacional o email).
+5. El teléfono puede ser de cualquier país. Acepta el formato que mande, el sistema lo normaliza.
+6. ANTES de buscar horarios, llama listar_tipos_cita y pregunta al paciente qué tipo necesita.
+7. Muestra horarios en lenguaje natural ("lunes 20 de abril a las 10:30 am"). NUNCA en ISO técnico. Cuando el paciente elija un horario, usa el campo start_at TAL CUAL venga del slot (no lo recalcules).
+
+REGLAS DE AGENDAMIENTO (críticas, leer con atención):
+8. Para agendar:
+   a) Repite al paciente profesional + tipo + fecha/hora y pide confirmación explícita ("sí", "confirmo", "dale").
+   b) Cuando el paciente confirma, llama agendar_cita EN EL MISMO TURNO. No respondas con texto primero.
+   c) SOLO confirma al paciente que la cita quedó agendada si recibiste un objeto "cita" con campo "id" en la respuesta de agendar_cita. Esa es la única evidencia válida.
+   d) Si agendar_cita devuelve un objeto con campo "error", NO confirmes. Explica al paciente qué pasó según el error:
+      - "out_of_schedule" → "Ese horario no está en los turnos del profesional, ¿elegimos otro?"
+      - "double_booking" → "Otro paciente acaba de tomar ese horario, ¿probamos otro?"
+      - "blocked_time" → "El profesional tiene un bloqueo en ese horario, ¿elegimos otro?"
+      - cualquier otro error → "No pude agendar por un problema técnico, ¿querés que te pase con una persona?" y ofrece escalar_a_humano.
+   e) JAMÁS digas "agendada", "confirmada", "reservada" o frases equivalentes sin un objeto "cita" de agendar_cita recibido en este turno. Si no lo llamaste o falló, no inventes que quedó.
+
+REGLAS GENERALES:
+9. NO inventes profesionales, especialidades, horarios, tipos de cita, citas previas, ni datos del paciente. Usa SOLO lo que devuelven las tools.
+10. NO des consejos médicos, diagnósticos, ni info sobre síntomas/medicamentos. Si preguntan algo médico, declina y ofrece agendar.
+11. Para EMERGENCIAS, dile al paciente que llame al número de emergencias local (123 en Colombia) y NO atiendas el caso por chat.
+12. Si pide hablar con una persona, o hay queja/factura/duda médica compleja → llama escalar_a_humano y deja de responder.
+13. Si el paciente pregunta "¿qué puedes hacer?", resume tus funciones en 3-4 líneas.`;
 }
 
 // ============================================================
@@ -423,17 +442,51 @@ function anthropicClient() {
   return _anthropicClient;
 }
 
+/**
+ * Prompt caching (Anthropic): marcamos el system prompt y la última tool
+ * con cache_control=ephemeral. Todo lo que esté ANTES del breakpoint se
+ * cachea. El caché dura 5 minutos y se renueva con cada uso; así en un
+ * loop con varios tool calls la 2da/3ra/4ta llamada paga ~10% del input.
+ *
+ * Ahorro típico en nuestro agente: 40-60% de input tokens por mensaje.
+ * Ref: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+ */
+function buildCachedSystem(system) {
+  return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
+}
+
+function buildCachedTools(toolList) {
+  if (!toolList || toolList.length === 0) return toolList;
+  return toolList.map((t, i) =>
+    i === toolList.length - 1
+      ? { ...t, cache_control: { type: 'ephemeral' } }
+      : t,
+  );
+}
+
 async function runAgentAnthropic(history, system, ctx) {
   const messages = history.map((m) => ({ role: m.role, content: m.content }));
+  const cachedSystem = buildCachedSystem(system);
+  const cachedTools = buildCachedTools(tools);
 
   for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
     const response = await anthropicClient().messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1024,
-      system,
-      tools,
+      system: cachedSystem,
+      tools: cachedTools,
       messages,
     });
+
+    // Log de uso de caché — útil para ver si está pegando.
+    const u = response.usage || {};
+    if (u.cache_creation_input_tokens || u.cache_read_input_tokens) {
+      console.error(
+        `[anthropic usage] in=${u.input_tokens} out=${u.output_tokens} ` +
+        `cache_write=${u.cache_creation_input_tokens || 0} ` +
+        `cache_read=${u.cache_read_input_tokens || 0}`,
+      );
+    }
 
     const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
 
@@ -449,7 +502,10 @@ async function runAgentAnthropic(history, system, ctx) {
 
     const toolResults = [];
     for (const toolUse of toolUseBlocks) {
-      console.log(`[anthropic] org=${ctx.organizationId} wa=${ctx.whatsapp} -> ${toolUse.name}`, toolUse.input);
+      console.error(
+        `[anthropic] org=${ctx.organizationId} wa=${ctx.whatsapp} -> ${toolUse.name} ` +
+        JSON.stringify(toolUse.input),
+      );
       const result = await executeTool(toolUse.name, toolUse.input, ctx);
       toolResults.push({
         type: 'tool_result',
