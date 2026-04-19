@@ -223,7 +223,7 @@ const tools = [
   {
     name: 'consultar_horarios_disponibles',
     description:
-      'Consulta horarios libres de un profesional para una fecha ESPECÍFICA (un solo día). Úsala solo cuando el paciente eligió un día concreto en el que el profesional atiende (verificado previamente con horarios_semanales_profesional). PRERREQUISITOS: provider_id de listar_profesionales, appointment_type_id de listar_tipos_cita. Si llamas con UUIDs inventados, devuelve error provider_no_encontrado o tipo_cita_no_encontrado.',
+      'Consulta horarios libres de un profesional para una fecha ESPECÍFICA (un solo día). Úsala solo cuando el paciente eligió un día concreto en el que el profesional atiende (verificado previamente con horarios_semanales_profesional). PRERREQUISITOS: provider_id de listar_profesionales, appointment_type_id de listar_tipos_cita. Si llamas con UUIDs inventados, devuelve error provider_no_encontrado o tipo_cita_no_encontrado. IMPORTANTE: si estás REPROGRAMANDO (mover una cita existente), pasá exclude_appointment_id con el id de esa cita para que sus propios bloques aparezcan como libres — si no, una cita larga (ej. 45 min = 2 bloques) se auto-bloquearía.',
     input_schema: {
       type: 'object',
       properties: {
@@ -233,6 +233,11 @@ const tools = [
           type: 'string',
           description:
             'UUID del tipo de cita. Necesario para saber la duración. Si no lo tienes aún, llama listar_tipos_cita primero.',
+        },
+        exclude_appointment_id: {
+          type: 'string',
+          description:
+            'UUID de una cita a excluir del chequeo de ocupación. SOLO se usa al reprogramar: pasa el id de la cita que se está moviendo para que sus propios bloques no la bloqueen a sí misma. En agendamiento nuevo, omítelo.',
         },
       },
       required: ['provider_id', 'fecha', 'appointment_type_id'],
@@ -268,9 +273,32 @@ const tools = [
     },
   },
   {
+    name: 'buscar_paciente_por_nombre',
+    description:
+      'Busca un paciente por nombre + apellido + fecha de nacimiento dentro de la clínica. Es la forma PRINCIPAL de identificar al paciente en el flujo de agendamiento: con solo esos tres datos se resuelve la gran mayoría de casos sin pedir documento ni correo. La búsqueda es tolerante a acentos y mayúsculas ("jose perez" encuentra a "José Pérez"). Devuelve un array "matches" con id, nombre completo, año de nacimiento, edad_anios y es_menor (true si <18 años). Uso: (a) matches.length === 1 → confirmá con el paciente ("¿Confirmás que es Juan Pérez, 1990?") y agendá; (b) matches.length === 0 → no está registrado, ofrecé crearlo con registrar_paciente usando esos mismos datos; (c) matches.length > 1 → hay homónimos genuinos, usá buscar_paciente_por_identificador pidiendo documento o correo. IMPORTANTE: si alguno de los matches es menor (es_menor=true), NO asumas que tiene documento ni correo — preguntá un dato alternativo (nombre del familiar, "el mayor o el menor", etc.).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        first_name: {
+          type: 'string',
+          description: 'Nombre del paciente. Puede venir sin acentos ni mayúsculas — la tool normaliza.',
+        },
+        last_name: {
+          type: 'string',
+          description: 'Apellido del paciente (opcional pero muy recomendado para reducir colisiones).',
+        },
+        birth_date: {
+          type: 'string',
+          description: 'Fecha de nacimiento en YYYY-MM-DD. Clave para desambiguar homónimos.',
+        },
+      },
+      required: ['first_name'],
+    },
+  },
+  {
     name: 'registrar_paciente',
     description:
-      'Registra un paciente nuevo en esta clínica. Para identificación futura confiable, pide SIEMPRE: first_name, last_name, birth_date (YYYY-MM-DD), y AL MENOS UNO de (id_number, email). El teléfono es opcional. Si el que escribe en WhatsApp está registrando a OTRA persona (hijo, pareja, madre, etc.), pasá for_self=false para que NO se guarde el WhatsApp del contacto como si fuera del paciente. Para clínicas veterinarias usa patient_kind="animal" (first_name=nombre de la mascota) con owner_first_name/owner_last_name; no pidas especie ni raza al paciente.',
+      'Registra un paciente nuevo en esta clínica. REQUERIDO: first_name. RECOMENDADO: last_name, birth_date (YYYY-MM-DD). OPCIONALES: id_number, email, phone — si el paciente no los tiene a mano (ej. menores sin documento ni correo), NO los exijas, registralo con lo que tenés. Si el que escribe en WhatsApp está registrando a OTRA persona (hijo, pareja, madre, etc.), pasá for_self=false para que NO se guarde el WhatsApp del contacto como si fuera del paciente. Para clínicas veterinarias usa patient_kind="animal" (first_name=nombre de la mascota) con owner_first_name/owner_last_name; no pidas especie ni raza al paciente.',
     input_schema: {
       type: 'object',
       properties: {
@@ -282,11 +310,11 @@ const tools = [
         },
         id_number: {
           type: 'string',
-          description: 'Documento/cédula/DNI del paciente. Identificador único ideal.',
+          description: 'Documento/cédula/DNI del paciente. Opcional — puede completarse más tarde en el panel o el día de la cita.',
         },
         email: {
           type: 'string',
-          description: 'Correo del paciente. Opcional si se dio id_number. (Se usa para identificación futura.)',
+          description: 'Correo del paciente. Opcional — puede completarse más tarde.',
         },
         phone: {
           type: 'string',
@@ -360,7 +388,7 @@ const tools = [
   {
     name: 'cancelar_cita',
     description:
-      'Cancela una cita por su UUID. Pide al paciente confirmación antes de llamar esto. Solo se pueden cancelar citas del propio paciente.',
+      'Cancela una cita por su UUID. ANTES de llamar esto, repetile al paciente los datos de la cita (profesional, día/hora, tipo) y pedí confirmación explícita — una cancelación por error pierde el slot. Solo se pueden cancelar citas del propio paciente.',
     input_schema: {
       type: 'object',
       properties: {
@@ -368,6 +396,23 @@ const tools = [
         motivo: { type: 'string', description: 'Motivo de la cancelación (opcional).' },
       },
       required: ['appointment_id'],
+    },
+  },
+  {
+    name: 'reprogramar_cita',
+    description:
+      'Mueve una cita existente a un nuevo horario con UPDATE in-place (misma cita, cambia solo start_at/end_at). Conserva el estado (una cita confirmada sigue confirmada), el profesional, el tipo y las notas. No sirve para cambiar de profesional o de tipo: en ese caso cancela y agenda una nueva. PRERREQUISITOS: (1) appointment_id de consultar_citas_paciente; (2) start_at debe venir de consultar_horarios_disponibles invocada con exclude_appointment_id = appointment_id para evitar el auto-bloqueo; (3) el paciente ya confirmó el nuevo horario. Rechaza si la cita original está en las próximas 2 horas o ya pasó (anti-abuso). La DB registra rescheduled_at automáticamente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        appointment_id: { type: 'string', description: 'UUID de la cita a mover.' },
+        start_at: {
+          type: 'string',
+          description:
+            'ISO 8601 con TZ del nuevo slot elegido (del campo start_at que devolvió consultar_horarios_disponibles).',
+        },
+      },
+      required: ['appointment_id', 'start_at'],
     },
   },
   {
@@ -523,7 +568,10 @@ const handlers = {
   },
 
   // ── Horarios disponibles ──────────────────────────────────────────────────
-  async consultar_horarios_disponibles(ctx, { provider_id, fecha, appointment_type_id }) {
+  async consultar_horarios_disponibles(
+    ctx,
+    { provider_id, fecha, appointment_type_id, exclude_appointment_id },
+  ) {
     const tz = ctx.timezone;
     const branchId = ctx.branchId;
 
@@ -578,14 +626,22 @@ const handlers = {
     const dayStart = isoFromLocalInTz(fecha, '00:00', tz);
     const dayEnd = isoFromLocalInTz(fecha, '23:59', tz);
 
+    let apptQuery = supabase
+      .from('appointments')
+      .select('id, start_at, end_at, status')
+      .eq('provider_id', provider_id)
+      .gte('start_at', dayStart)
+      .lte('start_at', dayEnd)
+      .not('status', 'in', '("cancelled")');
+    // Al reprogramar, excluir la propia cita del chequeo — si no, sus
+    // propios bloques (ej. 45 min = 2 slots de 30) se marcarían ocupados
+    // y el paciente no podría ni re-elegir el mismo horario.
+    if (exclude_appointment_id) {
+      apptQuery = apptQuery.neq('id', exclude_appointment_id);
+    }
+
     const [apptRes, blockedRes] = await Promise.all([
-      supabase
-        .from('appointments')
-        .select('id, start_at, end_at, status')
-        .eq('provider_id', provider_id)
-        .gte('start_at', dayStart)
-        .lte('start_at', dayEnd)
-        .not('status', 'in', '("cancelled")'),
+      apptQuery,
       supabase
         .from('provider_blocked_times')
         .select('id, start_at, end_at')
@@ -735,6 +791,73 @@ const handlers = {
     return { matches, total: matches.length };
   },
 
+  // ── Buscar paciente por nombre + fecha de nacimiento ────────────────────
+  // Vía principal de identificación en el flujo de agendamiento (menos
+  // fricción que pedir documento/correo en cada agendamiento). Usa una RPC
+  // que aplica unaccent + lower + ILIKE para ser tolerante a acentos y
+  // mayúsculas. Devuelve solo datos de confirmación visual (nombre completo,
+  // año de nacimiento, edad, es_menor, ciudad) — nunca PII sensible.
+  //
+  // Flag es_menor: cuando hay múltiples matches y alguno es menor, el bot NO
+  // puede pedirle documento o correo como desambiguador (muchos menores no
+  // tienen). Sabiendo que hay un menor en la lista, el bot elige una
+  // pregunta alternativa ("el mayor o el menor", nombre del responsable).
+  async buscar_paciente_por_nombre(ctx, { first_name, last_name, birth_date } = {}) {
+    if (!first_name || !String(first_name).trim()) {
+      return {
+        error: 'falta_nombre',
+        mensaje: 'Necesito al menos el nombre del paciente.',
+      };
+    }
+
+    const first = String(first_name).trim();
+    const last = last_name ? String(last_name).trim() : null;
+    const birth =
+      birth_date && /^\d{4}-\d{2}-\d{2}$/.test(String(birth_date).trim())
+        ? String(birth_date).trim()
+        : null;
+
+    const { data, error } = await supabase.rpc('search_patients_by_name', {
+      p_org_id: ctx.organizationId,
+      p_first_name: first,
+      p_last_name: last,
+      p_birth_date: birth,
+    });
+    if (error) {
+      return { error: error.message || 'error_busqueda_nombre' };
+    }
+
+    const todayYmd = DateTime.now().setZone(ctx.timezone).toFormat('yyyy-LL-dd');
+    const matches = (data || []).map((p) => {
+      let edad = null;
+      let esMenor = null;
+      if (p.birth_date) {
+        const d1 = DateTime.fromISO(todayYmd);
+        const d2 = DateTime.fromISO(String(p.birth_date));
+        if (d1.isValid && d2.isValid) {
+          edad = Math.floor(d1.diff(d2, 'years').years);
+          esMenor = edad < 18;
+        }
+      }
+      return {
+        id: p.id,
+        nombre_completo: `${p.first_name} ${p.last_name || ''}`.trim(),
+        anio_nacimiento: p.birth_date
+          ? Number(String(p.birth_date).slice(0, 4))
+          : null,
+        edad_anios: edad,
+        es_menor: esMenor,
+        ciudad: p.city || null,
+      };
+    });
+
+    return {
+      matches,
+      total: matches.length,
+      hay_menor: matches.some((m) => m.es_menor === true),
+    };
+  },
+
   // ── Registrar paciente ────────────────────────────────────────────────────
   // Para veterinaria: crea un owner (si no viene uno existente) y luego el patient
   // con owner_id. Especie y raza las completa la recepcionista más tarde — aquí
@@ -761,15 +884,13 @@ const handlers = {
       ? String(input.birth_date).trim()
       : null;
 
-    // Para identificación futura necesitamos al menos un identificador único
-    // (documento o email) además del nombre.
-    if (!idNumber && !email) {
-      return {
-        error: 'falta_identificador',
-        mensaje:
-          'Necesitamos al menos un documento o un correo para identificar al paciente en el futuro.',
-      };
-    }
+    // Identificadores opcionales: si no vienen, el paciente queda creado con
+    // solo nombre + apellido + birth_date. Se pueden completar más tarde
+    // desde el panel o al llegar a la cita. Importante para casos como menores
+    // sin documento ni correo, que antes quedaban bloqueados.
+    // El nombre sigue siendo obligatorio (required en el schema). Si faltan
+    // apellido y birth_date, igual lo dejamos crear — el panel pedirá los
+    // datos restantes cuando se agende presencialmente.
 
     // Si es para sí mismo y ya existe por (org, whatsapp), devolverlo sin duplicar
     if (forSelf) {
@@ -1073,6 +1194,124 @@ const handlers = {
     return {
       mensaje: 'Cita cancelada.',
       cita: { id: appointment_id, cuando: humanEs(appt.start_at, ctx.timezone) },
+    };
+  },
+
+  // ── Reprogramar cita (UPDATE in-place de start_at/end_at) ────────────────
+  // Reutiliza el slot de la misma cita manteniendo el id, status (confirmed
+  // sigue siendo confirmed), appointment_type y notas. rescheduled_at se
+  // setea vía trigger de DB cuando cambian los horarios.
+  //
+  // Reglas de seguridad:
+  //   - Debe ser del paciente (ctx.whatsapp o bot_last_identified_patient_id).
+  //   - La cita original no puede haber pasado ni estar en las próximas 2h
+  //     (evita abuso de último minuto).
+  //   - El nuevo slot valida con validateSlotInternal pasando
+  //     excludeAppointmentId = appointment_id para que no se auto-bloquee
+  //     contra sus propios slots (ej. citas de 45 min = 2 bloques de 30).
+  async reprogramar_cita(ctx, { appointment_id, start_at }) {
+    if (!appointment_id || !start_at) {
+      return { error: 'faltan_datos' };
+    }
+
+    // 1) Traer cita + tipo de cita (para duración)
+    const { data: appt, error: errA } = await supabase
+      .from('appointments')
+      .select(`
+        id, patient_id, provider_id, appointment_type_id, branch_id,
+        organization_id, status, start_at, end_at,
+        appointment_type:appointment_types(duration_minutes)
+      `)
+      .eq('id', appointment_id)
+      .maybeSingle();
+    if (errA) return { error: errA.message };
+    if (!appt) return { error: 'cita_no_encontrada' };
+    if (appt.organization_id !== ctx.organizationId) {
+      return { error: 'no_autorizado' };
+    }
+    if (appt.status === 'cancelled') return { error: 'cita_cancelada' };
+
+    // 2) Autorización: la cita debe pertenecer al paciente actual.
+    //    Preferí el paciente identificado en la conversación; si no hay,
+    //    cae al atajo por whatsapp.
+    let authorizedPatientId = null;
+    if (ctx.conversationId) {
+      const { data: conv } = await supabase
+        .from('whatsapp_conversations')
+        .select('bot_last_identified_patient_id, patient_id')
+        .eq('id', ctx.conversationId)
+        .maybeSingle();
+      authorizedPatientId =
+        conv?.bot_last_identified_patient_id || conv?.patient_id || null;
+    }
+    if (!authorizedPatientId) {
+      const me = await handlers.buscar_paciente(ctx);
+      authorizedPatientId = me.paciente?.id || null;
+    }
+    if (!authorizedPatientId || authorizedPatientId !== appt.patient_id) {
+      return { error: 'no_autorizado' };
+    }
+
+    // 3) Anti-abuso: no reprogramar citas ya pasadas ni dentro de 2 horas.
+    const nowMs = Date.now();
+    const originalStartMs = new Date(appt.start_at).getTime();
+    const twoHoursMs = 2 * 60 * 60 * 1000;
+    if (originalStartMs <= nowMs) {
+      return {
+        error: 'cita_ya_paso',
+        mensaje: 'Esa cita ya pasó, no se puede reprogramar.',
+      };
+    }
+    if (originalStartMs - nowMs < twoHoursMs) {
+      return {
+        error: 'muy_cerca',
+        mensaje:
+          'No se puede reprogramar una cita que es en menos de 2 horas. Para cambios de último momento, por favor contactá a la clínica.',
+      };
+    }
+
+    // 4) Calcular end_at a partir de la duración del tipo de cita.
+    const duration = appt.appointment_type?.duration_minutes;
+    if (!duration) return { error: 'tipo_cita_sin_duracion' };
+
+    const newStartIso = String(start_at);
+    const newStartMs = new Date(newStartIso).getTime();
+    if (!Number.isFinite(newStartMs) || newStartMs <= nowMs) {
+      return { error: 'start_at_invalido' };
+    }
+    const newEndIso = new Date(newStartMs + duration * 60 * 1000).toISOString();
+
+    // 5) Validar slot (schedule + no double-booking + no blocked_time),
+    //    excluyendo la propia cita para no auto-chocar.
+    const validation = await validateSlotInternal(ctx, {
+      providerId: appt.provider_id,
+      branchId: appt.branch_id,
+      startAtIso: newStartIso,
+      endAtIso: newEndIso,
+      excludeAppointmentId: appointment_id,
+    });
+    if (!validation.ok) {
+      return { error: validation.reason || 'slot_invalido' };
+    }
+
+    // 6) UPDATE in-place. El trigger set_appointment_rescheduled_at setea
+    //    rescheduled_at = now() automáticamente cuando cambian los horarios.
+    const { data: updated, error: errU } = await supabase
+      .from('appointments')
+      .update({ start_at: newStartIso, end_at: newEndIso })
+      .eq('id', appointment_id)
+      .select('id, start_at, end_at, status')
+      .single();
+    if (errU) return { error: errU.message };
+
+    return {
+      reprogramada: true,
+      cita: {
+        id: updated.id,
+        status: updated.status,
+        nuevo_horario: humanEs(updated.start_at, ctx.timezone),
+      },
+      mensaje: 'Cita reprogramada.',
     };
   },
 
