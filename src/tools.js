@@ -209,9 +209,21 @@ const tools = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'horarios_semanales_profesional',
+    description:
+      'Devuelve los días de la semana que atiende un profesional y los horarios de atención de cada día (ej: "lunes de 08:00 a 13:00", "jueves de 15:00 a 19:00"). ÚSALA INMEDIATAMENTE DESPUÉS de que el paciente elija un profesional y ANTES de preguntar "¿qué día querés?". Así podés decirle qué días atiende y evitás ofrecer días en los que no trabaja (lo que gasta llamadas innecesarias a consultar_horarios_disponibles). provider_id debe venir de listar_profesionales.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        provider_id: { type: 'string', description: 'UUID del profesional.' },
+      },
+      required: ['provider_id'],
+    },
+  },
+  {
     name: 'consultar_horarios_disponibles',
     description:
-      'Consulta horarios libres de un profesional para una fecha específica. PRERREQUISITOS OBLIGATORIOS: provider_id debe venir de listar_profesionales (NO lo inventes), appointment_type_id debe venir de listar_tipos_cita (NO lo inventes). Si llamas con UUIDs inventados, la tool devuelve error provider_no_encontrado o tipo_cita_no_encontrado y deberás llamar primero la tool que te da ese UUID. Llama UNA fecha a la vez.',
+      'Consulta horarios libres de un profesional para una fecha ESPECÍFICA (un solo día). Úsala solo cuando el paciente eligió un día concreto en el que el profesional atiende (verificado previamente con horarios_semanales_profesional). PRERREQUISITOS: provider_id de listar_profesionales, appointment_type_id de listar_tipos_cita. Si llamas con UUIDs inventados, devuelve error provider_no_encontrado o tipo_cita_no_encontrado.',
     input_schema: {
       type: 'object',
       properties: {
@@ -229,23 +241,66 @@ const tools = [
   {
     name: 'buscar_paciente',
     description:
-      'Busca el paciente por su número de WhatsApp dentro de esta clínica. SIEMPRE llámala al inicio de un nuevo flujo de agendamiento — si devuelve null, debes registrarlo con registrar_paciente antes de agendar.',
+      'Busca un paciente por el número de WhatsApp desde el que se escribe. Úsala como intento de reconocimiento rápido cuando el paciente pregunte por SUS citas ("¿cuándo es mi cita?"). NO la uses como forma principal de identificar para agendar (el que escribe puede no ser el paciente); para agendar, preferí buscar_paciente_por_identificador (documento o email).',
     input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'buscar_paciente_por_identificador',
+    description:
+      'Busca un paciente por documento (id_number) y/o correo (email) dentro de la clínica. Es la forma CORRECTA de identificar a un paciente para agendarle: el documento es único por persona y el correo casi siempre lo es. Devuelve un array "matches" con id, nombre completo, año de nacimiento y ciudad — NUNCA más PII que eso. Uso: (a) si matches.length === 1, confirmá con el usuario mostrando nombre + año de nacimiento antes de usar ese patient_id; (b) si matches.length === 0, la persona no está registrada, ofrece registrarla; (c) si matches.length > 1, pedí fecha de nacimiento y re-llamá esta tool con birth_date para desambiguar. NUNCA asumas identidad solo por coincidencia de nombre: siempre requiere confirmación explícita.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id_number: {
+          type: 'string',
+          description: 'Documento, cédula, DNI, etc. Espacios y guiones se normalizan.',
+        },
+        email: {
+          type: 'string',
+          description: 'Correo electrónico DEL PACIENTE (no del contacto que escribe).',
+        },
+        birth_date: {
+          type: 'string',
+          description: 'Fecha de nacimiento del paciente en YYYY-MM-DD. Opcional; úsala para desambiguar si hubo múltiples matches.',
+        },
+      },
+      required: [],
+    },
   },
   {
     name: 'registrar_paciente',
     description:
-      'Registra un paciente nuevo en esta clínica. Pide: nombre, apellido (opcional), y al menos UNO de (teléfono internacional o email). Para clínicas veterinarias usa patient_kind="animal" (first_name = nombre de la mascota) y completa owner_first_name/owner_last_name (datos del dueño). NO pidas especie ni raza al paciente — la recepcionista los completa después.',
+      'Registra un paciente nuevo en esta clínica. Para identificación futura confiable, pide SIEMPRE: first_name, last_name, birth_date (YYYY-MM-DD), y AL MENOS UNO de (id_number, email). El teléfono es opcional. Si el que escribe en WhatsApp está registrando a OTRA persona (hijo, pareja, madre, etc.), pasá for_self=false para que NO se guarde el WhatsApp del contacto como si fuera del paciente. Para clínicas veterinarias usa patient_kind="animal" (first_name=nombre de la mascota) con owner_first_name/owner_last_name; no pidas especie ni raza al paciente.',
     input_schema: {
       type: 'object',
       properties: {
         first_name: { type: 'string', description: 'Nombre del paciente. Para vet: nombre de la mascota.' },
-        last_name: { type: 'string', description: 'Apellido del paciente (opcional). Para vet: omitir.' },
+        last_name: { type: 'string', description: 'Apellido del paciente (opcional pero recomendado).' },
+        birth_date: {
+          type: 'string',
+          description: 'Fecha de nacimiento en YYYY-MM-DD. Muy recomendada — sirve para identificar al paciente de forma inequívoca en el futuro.',
+        },
+        id_number: {
+          type: 'string',
+          description: 'Documento/cédula/DNI del paciente. Identificador único ideal.',
+        },
+        email: {
+          type: 'string',
+          description: 'Correo del paciente. Opcional si se dio id_number. (Se usa para identificación futura.)',
+        },
         phone: {
           type: 'string',
-          description: 'Teléfono internacional (con o sin "+", el sistema normaliza). Opcional si das email.',
+          description: 'Teléfono internacional (opcional, solo contacto).',
         },
-        email: { type: 'string', description: 'Email (opcional si das phone).' },
+        gender: {
+          type: 'string',
+          description: 'Género del paciente si lo menciona (opcional). Valores tipo "M", "F", "O".',
+        },
+        for_self: {
+          type: 'boolean',
+          description:
+            'true (default) si el paciente es la misma persona que escribe por WhatsApp. false si el que escribe está registrando a otra persona (hijo, pareja, familiar) — en ese caso NO se asocia el WhatsApp del contacto al registro del paciente.',
+        },
         patient_kind: {
           type: 'string',
           enum: ['human', 'animal'],
@@ -289,6 +344,18 @@ const tools = [
     description:
       'Lista las próximas citas (no canceladas) del paciente actual en esta clínica. Útil cuando pregunta "¿cuándo es mi cita?" o "¿qué citas tengo?".',
     input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'confirmar_cita',
+    description:
+      'Marca una cita existente como confirmada (el paciente confirma que asistirá). Úsala cuando el paciente diga "confirmo mi cita", "sí voy a asistir" o similar, refiriéndose a una cita YA AGENDADA (no al flujo de agendamiento). El appointment_id debe venir de consultar_citas_paciente. Solo funciona con citas del propio paciente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        appointment_id: { type: 'string', description: 'UUID de la cita a confirmar.' },
+      },
+      required: ['appointment_id'],
+    },
   },
   {
     name: 'cancelar_cita',
@@ -389,6 +456,69 @@ const handlers = {
         nombre: t.name,
         duracion_min: t.duration_minutes,
       })),
+    };
+  },
+
+  // ── Horarios semanales del profesional ────────────────────────────────────
+  // Devuelve los días que atiende + rangos horarios por día. Lo usa el bot
+  // para informar al paciente ANTES de preguntar "¿qué día?", así no ofrece
+  // días en los que el profesional no atiende (= evita llamadas inútiles a
+  // consultar_horarios_disponibles y mensajes del tipo "ese día no atiende").
+  async horarios_semanales_profesional(ctx, { provider_id }) {
+    const branchId = ctx.branchId;
+    if (!branchId) {
+      return { error: 'no_branch_configured', mensaje: 'El canal no tiene sucursal asignada.' };
+    }
+    if (!(await providerExistsInOrg(ctx.organizationId, provider_id))) {
+      return {
+        error: 'provider_no_encontrado',
+        mensaje: 'Ese profesional no existe. Llama a listar_profesionales primero.',
+      };
+    }
+
+    const { data, error } = await supabase
+      .from('provider_schedules')
+      .select('day_of_week, start_time, end_time')
+      .eq('organization_id', ctx.organizationId)
+      .eq('provider_id', provider_id)
+      .eq('branch_id', branchId)
+      .eq('is_active', true)
+      .order('day_of_week')
+      .order('start_time');
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      return {
+        atiende: false,
+        dias: [],
+        mensaje: 'Este profesional no tiene horarios configurados en esta sede.',
+      };
+    }
+
+    const DIAS_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    // Agrupar por día
+    const porDia = new Map();
+    for (const row of data) {
+      const dow = row.day_of_week;
+      const start = String(row.start_time).slice(0, 5); // HH:MM
+      const end = String(row.end_time).slice(0, 5);
+      if (!porDia.has(dow)) porDia.set(dow, []);
+      porDia.get(dow).push(`${start}–${end}`);
+    }
+
+    const dias = Array.from(porDia.keys())
+      .sort((a, b) => a - b)
+      .map((dow) => ({
+        dia: DIAS_ES[dow],
+        dia_num: dow, // 0=dom..6=sáb, para referencia del bot
+        rangos: porDia.get(dow),
+      }));
+
+    return {
+      atiende: true,
+      dias,
+      nota:
+        'Ofrecé al paciente SOLO los días listados en "dias". Si pide un día que no está, decile amablemente que el profesional no atiende ese día.',
     };
   },
 
@@ -549,27 +679,119 @@ const handlers = {
     };
   },
 
+  // ── Buscar paciente por documento / email (identificador único) ─────────
+  // Esta es la vía correcta para identificar un paciente en un flujo de
+  // agendamiento: el documento es único, el email casi siempre también.
+  // Nunca se identifica por nombre (colisiones reales en clínicas grandes).
+  // La respuesta expone solo id + nombre + año de nacimiento + ciudad,
+  // para que el bot pueda confirmar visualmente con el usuario sin filtrar
+  // datos sensibles (DOB completa, teléfono, email, historial).
+  async buscar_paciente_por_identificador(ctx, { id_number, email, birth_date } = {}) {
+    if (!id_number && !email) {
+      return {
+        error: 'falta_identificador',
+        mensaje: 'Necesito documento o correo del paciente para identificarlo.',
+      };
+    }
+
+    const base = () =>
+      supabase
+        .from('patients')
+        .select('id, first_name, last_name, birth_date, city')
+        .eq('organization_id', ctx.organizationId)
+        .eq('is_active', true);
+
+    const resultMap = new Map(); // dedup por id
+
+    if (id_number) {
+      const clean = String(id_number).replace(/[\s-]/g, '').trim();
+      if (clean.length > 0) {
+        let q = base().eq('id_number', clean);
+        if (birth_date) q = q.eq('birth_date', birth_date);
+        const { data, error } = await q.limit(5);
+        if (error) throw error;
+        for (const p of data || []) resultMap.set(p.id, p);
+      }
+    }
+
+    if (email) {
+      const clean = String(email).trim().toLowerCase();
+      if (clean.includes('@')) {
+        let q = base().ilike('email', clean);
+        if (birth_date) q = q.eq('birth_date', birth_date);
+        const { data, error } = await q.limit(5);
+        if (error) throw error;
+        for (const p of data || []) resultMap.set(p.id, p);
+      }
+    }
+
+    const matches = Array.from(resultMap.values()).map((p) => ({
+      id: p.id,
+      nombre_completo: `${p.first_name} ${p.last_name || ''}`.trim(),
+      anio_nacimiento: p.birth_date ? Number(String(p.birth_date).slice(0, 4)) : null,
+      ciudad: p.city || null,
+    }));
+
+    return { matches, total: matches.length };
+  },
+
   // ── Registrar paciente ────────────────────────────────────────────────────
   // Para veterinaria: crea un owner (si no viene uno existente) y luego el patient
   // con owner_id. Especie y raza las completa la recepcionista más tarde — aquí
   // solo capturamos lo mínimo para identificar a la mascota y contactar al dueño.
+  // Para humanos: si for_self=false, NO se guarda el whatsapp del contacto en el
+  // paciente (ej. madre registrando a su hijo) — la conversación tampoco se linkea.
   async registrar_paciente(ctx, input) {
     const wa = normalizeWhatsapp(ctx.whatsapp);
     if (!wa) return { error: 'whatsapp_invalido' };
 
-    const phone = input.phone ? normalizePhone(input.phone) : null;
-    const email = input.email && String(input.email).includes('@') ? String(input.email).trim() : null;
+    // for_self: true (default) → el paciente ES quien escribe. false → se está
+    // registrando a un tercero (hijo, pareja, madre), no asociamos el whatsapp
+    // del contacto al nuevo paciente ni linkeamos la conversación a su id.
+    const forSelf = input.for_self !== false;
 
-    if (!phone && !email) {
+    const phone = input.phone ? normalizePhone(input.phone) : null;
+    const email = input.email && String(input.email).includes('@')
+      ? String(input.email).trim().toLowerCase()
+      : null;
+    const idNumber = input.id_number
+      ? String(input.id_number).replace(/[\s-]/g, '').trim() || null
+      : null;
+    const birthDate = input.birth_date && /^\d{4}-\d{2}-\d{2}$/.test(String(input.birth_date).trim())
+      ? String(input.birth_date).trim()
+      : null;
+
+    // Para identificación futura necesitamos al menos un identificador único
+    // (documento o email) además del nombre.
+    if (!idNumber && !email) {
       return {
-        error: 'falta_contacto',
-        mensaje: 'Necesitamos al menos un teléfono internacional o un email para registrarte.',
+        error: 'falta_identificador',
+        mensaje:
+          'Necesitamos al menos un documento o un correo para identificar al paciente en el futuro.',
       };
     }
 
-    // Si ya existe por (org, whatsapp), devolverlo sin duplicar
-    const existing = await handlers.buscar_paciente(ctx);
-    if (existing.paciente) return { paciente: existing.paciente, ya_existia: true };
+    // Si es para sí mismo y ya existe por (org, whatsapp), devolverlo sin duplicar
+    if (forSelf) {
+      const existing = await handlers.buscar_paciente(ctx);
+      if (existing.paciente) return { paciente: existing.paciente, ya_existia: true };
+    }
+
+    // Si ya hay un paciente con ese documento o email en la misma org, no duplicar
+    if (idNumber || email) {
+      const dupCheck = await handlers.buscar_paciente_por_identificador(ctx, {
+        id_number: idNumber || undefined,
+        email: email || undefined,
+      });
+      if (dupCheck.matches && dupCheck.matches.length > 0) {
+        return {
+          ya_existia: true,
+          paciente: dupCheck.matches[0],
+          mensaje:
+            'Ya existe un paciente con ese documento/correo. Si es la misma persona, confirmá antes de seguir.',
+        };
+      }
+    }
 
     // Determinar patient_kind: respetar input si la org es veterinaria
     const kind =
@@ -581,11 +803,20 @@ const handlers = {
       organization_id: ctx.organizationId,
       first_name: String(input.first_name).trim(),
       last_name: input.last_name ? String(input.last_name).trim() : null,
-      whatsapp: wa,
+      patient_kind: kind,
       phone,
       email,
-      patient_kind: kind,
+      id_number: idNumber,
+      birth_date: birthDate,
+      gender: input.gender ? String(input.gender).trim().toUpperCase().slice(0, 1) : null,
     };
+
+    // Solo si es para sí mismo guardamos el whatsapp del contacto como whatsapp
+    // del paciente. Para terceros queda NULL (la conversación sigue siendo del
+    // contacto, no del paciente).
+    if (forSelf) {
+      payload.whatsapp = wa;
+    }
 
     // Veterinaria: crear owner con datos del dueño (teléfono/email para contacto)
     if (kind === 'animal') {
@@ -622,12 +853,14 @@ const handlers = {
     const { data, error } = await supabase
       .from('patients')
       .insert(payload)
-      .select('id, first_name, last_name, email, phone, patient_kind')
+      .select('id, first_name, last_name, email, phone, birth_date, id_number, patient_kind')
       .single();
     if (error) return { error: error.message || 'error_al_registrar' };
 
-    // Linkear conversación con el paciente recién creado
-    if (ctx.conversationId) {
+    // Linkear conversación con el paciente SOLO si registró para sí mismo.
+    // Si registró a un tercero, la conversación sigue siendo del contacto, no
+    // del paciente — así "¿cuándo es mi cita?" sigue funcionando para el contacto.
+    if (forSelf && ctx.conversationId) {
       await supabase
         .from('whatsapp_conversations')
         .update({ patient_id: data.id })
@@ -774,6 +1007,42 @@ const handlers = {
     };
   },
 
+  // ── Confirmar cita (paciente confirma que asistirá) ──────────────────────
+  async confirmar_cita(ctx, { appointment_id }) {
+    const me = await handlers.buscar_paciente(ctx);
+    if (!me.paciente) return { error: 'paciente_no_registrado' };
+
+    const { data: appt } = await supabase
+      .from('appointments')
+      .select('id, patient_id, organization_id, status, start_at')
+      .eq('id', appointment_id)
+      .maybeSingle();
+    if (!appt) return { error: 'cita_no_encontrada' };
+    if (appt.organization_id !== ctx.organizationId || appt.patient_id !== me.paciente.id) {
+      return { error: 'no_autorizado' };
+    }
+    if (appt.status === 'cancelled') return { error: 'cita_cancelada' };
+    if (appt.status === 'confirmed') {
+      return {
+        ya_confirmada: true,
+        cita: { id: appt.id, cuando: humanEs(appt.start_at, ctx.timezone) },
+        mensaje: 'La cita ya estaba confirmada.',
+      };
+    }
+
+    const { error } = await supabase
+      .from('appointments')
+      .update({ status: 'confirmed' })
+      .eq('id', appointment_id);
+    if (error) return { error: error.message };
+
+    return {
+      confirmada: true,
+      cita: { id: appt.id, cuando: humanEs(appt.start_at, ctx.timezone) },
+      mensaje: 'Cita confirmada.',
+    };
+  },
+
   // ── Cancelar cita ─────────────────────────────────────────────────────────
   async cancelar_cita(ctx, { appointment_id, motivo }) {
     // Verificar que la cita es de este paciente / org
@@ -827,6 +1096,70 @@ const handlers = {
     };
   },
 };
+
+// ============================================================
+// Cache in-memory para tools "estáticas" de catálogo
+// ============================================================
+// Listar especialidades / profesionales / tipos de cita y los horarios
+// semanales del profesional son datos que NO cambian durante una
+// conversación. Si el modelo (o el flujo) los vuelve a pedir, devolvemos
+// el resultado cacheado y evitamos el roundtrip a Supabase + los tokens
+// del resultado en el próximo turno.
+//
+// - Clave: tool|organization_id|branch_id|inputSerialized
+// - TTL: 5 minutos. Si staff agrega una especialidad nueva, tarda hasta
+//   5 min en reflejarse en conversaciones que ya habían cargado la lista.
+//   Trade-off aceptado: los catálogos cambian con baja frecuencia.
+// - No se cachean resultados con `error` (dejamos que reintente).
+// - Limpieza lazy cuando el Map crece (guardia contra fugas).
+
+const TOOL_CACHE_TTL_MS = 5 * 60 * 1000;
+const _toolCache = new Map();
+
+function _toolCacheKey(name, ctx, input) {
+  const org = ctx?.organizationId || '';
+  const br = ctx?.branchId || '';
+  const inp = JSON.stringify(input || {});
+  return `${name}|${org}|${br}|${inp}`;
+}
+
+function withToolCache(name, fn, ttlMs = TOOL_CACHE_TTL_MS) {
+  return async function cached(ctx, input) {
+    const key = _toolCacheKey(name, ctx, input);
+    const now = Date.now();
+    const hit = _toolCache.get(key);
+    if (hit && hit.expiresAt > now) {
+      return hit.value;
+    }
+    const value = await fn(ctx, input);
+    if (!(value && typeof value === 'object' && value.error)) {
+      _toolCache.set(key, { expiresAt: now + ttlMs, value });
+    }
+    if (_toolCache.size > 500) {
+      for (const [k, v] of _toolCache) {
+        if (v.expiresAt <= now) _toolCache.delete(k);
+      }
+    }
+    return value;
+  };
+}
+
+handlers.listar_especialidades = withToolCache(
+  'listar_especialidades',
+  handlers.listar_especialidades,
+);
+handlers.listar_profesionales = withToolCache(
+  'listar_profesionales',
+  handlers.listar_profesionales,
+);
+handlers.listar_tipos_cita = withToolCache(
+  'listar_tipos_cita',
+  handlers.listar_tipos_cita,
+);
+handlers.horarios_semanales_profesional = withToolCache(
+  'horarios_semanales_profesional',
+  handlers.horarios_semanales_profesional,
+);
 
 // ============================================================
 // Dispatcher + trazabilidad a DB
