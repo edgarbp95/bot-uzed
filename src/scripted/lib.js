@@ -245,6 +245,32 @@ function parseBirthDateInput(raw) {
   return null;
 }
 
+// ============================================================
+// Especialidades que tienen al menos un profesional activo
+// ============================================================
+
+/**
+ * Filtra `listar_especialidades` devolviendo solo las que tienen al menos
+ * un profesional activo asignado. Evita mostrarle al paciente especialidades
+ * "huecas" (la clínica las tiene en el catálogo pero no contrató médicos).
+ *
+ * Costo: 2 queries en paralelo (especialidades + profesionales sin filtrar).
+ * Aceptable porque los dos listados están cacheados in-memory con TTL
+ * (ver _internal.cacheListar en tools.js) y son chicos (<200 rows cada uno).
+ */
+async function listSpecialtiesWithProviders(ctx) {
+  const [espRes, profRes] = await Promise.all([
+    handlers.listar_especialidades(ctx),
+    handlers.listar_profesionales(ctx),
+  ]);
+  const withProviders = new Set(
+    (profRes?.profesionales || [])
+      .map((p) => p.especialidad_id)
+      .filter(Boolean),
+  );
+  return (espRes?.especialidades || []).filter((s) => withProviders.has(s.id));
+}
+
 module.exports = {
   // Constantes
   MAX_DAYS_IN_PICKER,
@@ -253,6 +279,7 @@ module.exports = {
   resolveScriptedPatientId,
   listPatientFutureAppointments,
   findAvailableDaysForProvider,
+  listSpecialtiesWithProviders,
   // Formatters
   formatDayLabelEs,
   formatTimeLabelEs,

@@ -40,8 +40,8 @@ async function handleElegirCita(ctx, input, state) {
       return {
         messages: [
           buildText(
-            'No tengo registrada ninguna cita a tu nombre. ' +
-            'Si querés, agendemos una — escribí "menú" y elegí "Agendar".',
+            'No encuentro ninguna cita registrada a tu nombre. ' +
+            'Si querés, te ayudo a agendar una — escribí "menú" y elegí "Agendar".',
           ),
         ],
         transition: 'end',
@@ -61,9 +61,9 @@ async function handleElegirCita(ctx, input, state) {
         return {
           messages: [
             buildText(
-              'Tus próximas citas son demasiado cercanas como para ' +
-              'reprogramarlas por acá (la regla es al menos 2 horas antes). ' +
-              'Te paso con recepción.',
+              'Tus próximas citas son demasiado cercanas para cambiarlas por acá ' +
+              '(necesitamos al menos 2 horas de anticipación). ' +
+              'Te paso con recepción para que te ayuden.',
             ),
           ],
           transition: { to: 'escalar.confirmacion', state },
@@ -72,7 +72,7 @@ async function handleElegirCita(ctx, input, state) {
       return {
         messages: [
           buildText(
-            'No tengo citas futuras a tu nombre. Si querés agendar, ' +
+            'No veo citas futuras a tu nombre. Si querés agendar una, ' +
             'escribí "menú" y elegí "Agendar una cita".',
           ),
         ],
@@ -101,7 +101,7 @@ async function handleElegirCita(ctx, input, state) {
     return {
       messages: [
         buildList(
-          '¿Cuál querés reprogramar?',
+          'Claro que sí, te ayudo a reprogramar. ¿Cuál de estas citas querés mover?',
           'Ver citas',
           [{
             title: 'Mis próximas citas',
@@ -155,7 +155,7 @@ async function handleDia(ctx, input, state) {
     const r = await fetchAppointmentBasics(ctx, state.appointmentId);
     if (!r) {
       return {
-        messages: [buildText('No encontré la cita que querías reprogramar. Volvé al menú y reintentá.')],
+        messages: [buildText('Disculpá, no encontré la cita que querías reprogramar. Escribí "menú" y reintentamos, ¿sí?')],
         transition: 'end',
       };
     }
@@ -170,7 +170,8 @@ async function handleDia(ctx, input, state) {
       return {
         messages: [
           buildText(
-            'No veo disponibilidad en los próximos 30 días con ese profesional. Te paso con recepción.',
+            'Revisé la agenda y no veo disponibilidad en los próximos 30 días con ese profesional. ' +
+            'Te paso con recepción para ver qué podemos hacer.',
           ),
         ],
         transition: { to: 'escalar.confirmacion', state },
@@ -179,7 +180,7 @@ async function handleDia(ctx, input, state) {
 
     return {
       messages: [
-        buildText(`Reprogramando tu cita del ${state.oldCuando || 'original'}.`),
+        buildText(`Vamos a mover tu cita del ${state.oldCuando || 'original'}.`),
         buildList(
           '¿Para qué día la movemos?',
           'Ver días',
@@ -233,7 +234,7 @@ async function handleHora(ctx, input, state) {
 
     if (slots.length === 0) {
       return {
-        messages: [buildText('Justo se ocuparon los horarios de ese día. Elegí otro.')],
+        messages: [buildText('Uy, se ocuparon los horarios de ese día. Elegí otro, así seguimos.')],
         transition: { to: 'reprogramar.dia', state },
       };
     }
@@ -241,7 +242,7 @@ async function handleHora(ctx, input, state) {
     return {
       messages: [
         buildList(
-          '¿A qué hora?',
+          'Elegí el horario que mejor te quede:',
           'Ver horarios',
           [{
             title: 'Horarios disponibles',
@@ -279,11 +280,11 @@ async function handleHora(ctx, input, state) {
 async function handleConfirmacion(ctx, input, state) {
   if (!input) {
     const resumen =
-      `Reprogramando:\n\n` +
+      `Entonces te reprogramo así:\n\n` +
       `• De ${state.oldCuando || formatShortDateTimeEs(state.oldStartAt, ctx.timezone)}\n` +
       `• A ${formatShortDateTimeEs(state.newStartAt, ctx.timezone)}\n` +
       (state.providerName ? `• Con ${state.providerName}\n` : '') +
-      `\n¿Confirmamos el cambio?`;
+      `\n¿Te confirmo el cambio?`;
 
     return {
       messages: [
@@ -308,13 +309,13 @@ async function handleConfirmacion(ctx, input, state) {
 
     if (r?.error) {
       const errorMessages = {
-        cita_ya_paso: 'Esa cita ya pasó, no se puede reprogramar.',
-        muy_cerca: 'La cita original es en menos de 2 horas. Para cambios de último momento, contactá a la clínica.',
-        cita_cancelada: 'La cita ya estaba cancelada.',
-        no_autorizado: 'No pude verificar que la cita sea tuya.',
-        double_booking: 'Otro paciente tomó ese horario. Elegí otro.',
+        cita_ya_paso: 'Esa cita ya pasó, así que no puedo reprogramarla.',
+        muy_cerca: 'La cita original es en menos de 2 horas y no puedo moverla desde acá. Te paso con recepción para que te ayuden.',
+        cita_cancelada: 'Esa cita ya figuraba cancelada.',
+        no_autorizado: 'No pude verificar que la cita sea tuya. Te paso con recepción.',
+        double_booking: 'Uh, otro paciente tomó ese horario justo antes. Elegí otro, por favor.',
       };
-      const msg = errorMessages[r.error] || r.mensaje || 'No pude reprogramar la cita. Te paso con recepción.';
+      const msg = errorMessages[r.error] || r.mensaje || 'No logré reprogramar la cita. Te paso con recepción para que te ayuden.';
 
       if (r.error === 'double_booking') {
         return {
@@ -334,7 +335,7 @@ async function handleConfirmacion(ctx, input, state) {
     return {
       messages: [
         buildText(
-          `¡Listo! Tu cita quedó reprogramada para ${r.cita?.nuevo_horario || formatShortDateTimeEs(state.newStartAt, ctx.timezone)}.`,
+          `¡Listo! Tu cita quedó reprogramada para ${r.cita?.nuevo_horario || formatShortDateTimeEs(state.newStartAt, ctx.timezone)}. Te esperamos.`,
         ),
       ],
       transition: 'end',
@@ -343,7 +344,7 @@ async function handleConfirmacion(ctx, input, state) {
 
   if (input.type === 'button' && input.id === 'rep.conf.no') {
     return {
-      messages: [buildText('No reprogramo nada, tu cita queda como estaba.')],
+      messages: [buildText('Sin problema, dejamos tu cita como estaba.')],
       transition: 'end',
     };
   }

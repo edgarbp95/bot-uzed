@@ -299,7 +299,7 @@ async function runDispatch(ctx, input, step, state) {
       console.error(`[scripted] step ${step} threw:`, err?.message, err?.stack);
       allMessages.push({
         kind: 'text',
-        text: 'Uy, tuve un problema técnico. Escribí "menú" para arrancar de nuevo.',
+        text: 'Uy, se me complicó algo del lado técnico. ¿Podés escribir "menú" así arrancamos de nuevo?',
       });
       terminal = true;
       step = null;
@@ -418,7 +418,7 @@ async function handleScriptedMessage({
         phoneNumberId,
         accessToken,
         to: from,
-        text: 'Por ahora solo puedo procesar texto y opciones del menú. ¿Querés que te muestre el menú? Escribí "menú".',
+        text: 'Disculpá, por ahora solo puedo procesar texto y opciones del menú. Si querés, escribí "menú" y te muestro todo lo que puedo ayudarte.',
       });
       return;
     }
@@ -483,7 +483,7 @@ async function handleScriptedMessage({
         phoneNumberId,
         accessToken,
         to: from,
-        text: 'Tuve un problema procesando tu mensaje. Escribí "menú" para arrancar de nuevo.',
+        text: 'Uy, tuve un problema procesando tu mensaje. ¿Podés escribir "menú" así arrancamos de nuevo?',
       });
     } catch {}
 

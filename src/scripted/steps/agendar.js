@@ -4,15 +4,20 @@
  * src/scripted/steps/agendar.js — Flujo scripted de agendar cita.
  *
  * Sub-steps (en orden):
- *   1. agendar.especialidad      → list (saltable si hay 1 sola)
- *   2. agendar.tipo              → list (saltable si hay 1 solo)
- *   3. agendar.profesional       → list (saltable si hay 1 solo)
+ *   1. agendar.especialidad      → list (solo muestra especialidades con
+ *                                   al menos 1 profesional; saltable si hay 1)
+ *   2. agendar.profesional       → list (saltable si hay 1 solo en la esp.)
+ *   3. agendar.tipo              → list (saltable si hay 1 solo)
  *   4. agendar.dia               → list (próx 10 días con slots)
  *   5. agendar.hora              → list (slots del día)
  *   6. agendar.paciente_confirmar → buttons (si hay match por whatsapp)
  *   7a. agendar.registro.*       → 4 pasos secuenciales de texto
  *   7b. agendar.registro_flow    → (si WHATSAPP_USE_FLOW_REGISTRO=true)
  *   8. agendar.confirmacion      → buttons [Confirmar] [Cancelar]
+ *
+ * Orden deliberado: especialidad → profesional → tipo → día.
+ * Primero el paciente elige "con quién" (más importante para él), después
+ * el tipo de consulta (control, primera vez, etc.), después el día/hora.
  *
  * Prefijos de IDs en respuestas del usuario:
  *   agd.esp.<uuid>, agd.tipo.<uuid>, agd.prof.<uuid>,
@@ -30,6 +35,7 @@ const {
 } = require('../messages');
 const {
   findAvailableDaysForProvider,
+  listSpecialtiesWithProviders,
   formatTimeLabelEs,
   formatShortDateTimeEs,
   parseBirthDateInput,
@@ -38,8 +44,19 @@ const {
 // Si esta env var está en 'true' y WHATSAPP_FLOW_REGISTRO_ID está seteado,
 // el registro de paciente usa Flow en vez del camino secuencial.
 function useFlowForRegistro() {
-  return process.env.WHATSAPP_USE_FLOW_REGISTRO === 'true'
+  const enabled = process.env.WHATSAPP_USE_FLOW_REGISTRO === 'true'
     && !!process.env.WHATSAPP_FLOW_REGISTRO_ID;
+  // Log de una sola vez por proceso para facilitar debug del setup en cPanel.
+  if (!useFlowForRegistro._logged) {
+    console.log(
+      '[scripted] Flow registro paciente: %s (WHATSAPP_USE_FLOW_REGISTRO=%s, WHATSAPP_FLOW_REGISTRO_ID=%s)',
+      enabled ? 'ENABLED' : 'DISABLED',
+      process.env.WHATSAPP_USE_FLOW_REGISTRO,
+      process.env.WHATSAPP_FLOW_REGISTRO_ID ? '<set>' : '<missing>',
+    );
+    useFlowForRegistro._logged = true;
+  }
+  return enabled;
 }
 
 // ============================================================
@@ -48,12 +65,17 @@ function useFlowForRegistro() {
 
 async function handleEspecialidad(ctx, input, state) {
   if (!input) {
-    const r = await handlers.listar_especialidades(ctx);
-    const items = r?.especialidades || [];
+    // Filtramos las especialidades "huecas": si no hay un profesional activo
+    // asignado, no tiene sentido ofrecerla (el paciente la elegiría y después
+    // el bot se ahogaría en "no hay profesionales para esa especialidad").
+    const items = await listSpecialtiesWithProviders(ctx);
     if (items.length === 0) {
       return {
         messages: [
-          buildText('La clínica no tiene especialidades configuradas. Te paso con recepción.'),
+          buildText(
+            'Todavía no tenemos profesionales configurados en el sistema. ' +
+            'Te paso con recepción para que te ayuden.',
+          ),
         ],
         transition: { to: 'escalar.confirmacion', state: {} },
       };
@@ -63,7 +85,7 @@ async function handleEspecialidad(ctx, input, state) {
       return {
         messages: [],
         transition: {
-          to: 'agendar.tipo',
+          to: 'agendar.profesional',
           state: {
             ...state,
             specialtyId: only.id,
@@ -76,7 +98,7 @@ async function handleEspecialidad(ctx, input, state) {
     return {
       messages: [
         buildList(
-          '¿Qué especialidad necesitás?',
+          'Perfecto, te ayudo a agendar tu cita. ¿Qué especialidad estás buscando?',
           'Ver especialidades',
           [{
             title: 'Especialidades',
@@ -98,7 +120,7 @@ async function handleEspecialidad(ctx, input, state) {
     return {
       messages: [],
       transition: {
-        to: 'agendar.tipo',
+        to: 'agendar.profesional',
         state: {
           ...state,
           specialtyId: id,
@@ -122,7 +144,10 @@ async function handleTipo(ctx, input, state) {
     if (items.length === 0) {
       return {
         messages: [
-          buildText('No hay tipos de cita configurados. Te paso con recepción.'),
+          buildText(
+            'No tenemos tipos de consulta configurados todavía. ' +
+            'Te paso con recepción para que te ayuden.',
+          ),
         ],
         transition: { to: 'escalar.confirmacion', state: {} },
       };
@@ -132,7 +157,7 @@ async function handleTipo(ctx, input, state) {
       return {
         messages: [],
         transition: {
-          to: 'agendar.profesional',
+          to: 'agendar.dia',
           state: {
             ...state,
             appointmentTypeId: only.id,
@@ -143,10 +168,16 @@ async function handleTipo(ctx, input, state) {
       };
     }
 
+    // Header dinámico: si ya elegimos profesional, lo mencionamos para que
+    // el paciente tenga contexto de con quién va a ser la cita.
+    const bodyText = state.providerName
+      ? `Excelente, con ${state.providerName}. ¿Qué tipo de consulta vas a necesitar?`
+      : '¿Qué tipo de consulta vas a necesitar?';
+
     return {
       messages: [
         buildList(
-          '¿Qué tipo de atención?',
+          bodyText,
           'Ver tipos',
           [{
             title: 'Tipos de cita',
@@ -171,7 +202,7 @@ async function handleTipo(ctx, input, state) {
     return {
       messages: [],
       transition: {
-        to: 'agendar.profesional',
+        to: 'agendar.dia',
         state: {
           ...state,
           appointmentTypeId: id,
@@ -198,17 +229,24 @@ async function handleProfesional(ctx, input, state) {
     if (items.length === 0) {
       return {
         messages: [
-          buildText('No hay profesionales disponibles para esa especialidad. Te paso con recepción.'),
+          buildText(
+            'Por ahora no tenemos profesionales disponibles para esa especialidad. ' +
+            'Te paso con recepción para que te orienten.',
+          ),
         ],
         transition: { to: 'escalar.confirmacion', state: {} },
       };
     }
     if (items.length === 1) {
+      // Único profesional: skip silencioso. El header del próximo step
+      // (agendar.tipo) menciona el nombre del profesional, así que el
+      // paciente igual se entera con quién va sin necesidad de un mensaje
+      // extra que sume ruido.
       const only = items[0];
       return {
         messages: [],
         transition: {
-          to: 'agendar.dia',
+          to: 'agendar.tipo',
           state: {
             ...state,
             providerId: only.id,
@@ -221,7 +259,7 @@ async function handleProfesional(ctx, input, state) {
     return {
       messages: [
         buildList(
-          '¿Con qué profesional?',
+          `¿Con qué profesional te gustaría agendar${state.specialtyName ? ` de ${state.specialtyName}` : ''}?`,
           'Ver profesionales',
           [{
             title: 'Profesionales',
@@ -243,7 +281,7 @@ async function handleProfesional(ctx, input, state) {
     return {
       messages: [],
       transition: {
-        to: 'agendar.dia',
+        to: 'agendar.tipo',
         state: {
           ...state,
           providerId: id,
@@ -271,9 +309,9 @@ async function handleDia(ctx, input, state) {
       return {
         messages: [
           buildText(
-            `${state.providerName || 'El profesional'} no tiene horarios ` +
-            `disponibles en los próximos 30 días para ${state.appointmentTypeName || 'este tipo de cita'}. ` +
-            'Te paso con recepción para que te ayuden.',
+            `Revisé la agenda y ${state.providerName || 'el profesional'} no tiene horarios ` +
+            `disponibles en los próximos 30 días para ${state.appointmentTypeName || 'este tipo de consulta'}. ` +
+            'Te paso con recepción para ver alternativas, ¿te parece?',
           ),
         ],
         transition: { to: 'escalar.confirmacion', state: {} },
@@ -283,7 +321,7 @@ async function handleDia(ctx, input, state) {
     return {
       messages: [
         buildList(
-          `¿Qué día te queda bien con ${state.providerName || 'el profesional'}?`,
+          `¿Qué día te viene bien para ver a ${state.providerName || 'el profesional'}?`,
           'Ver días',
           [{
             title: 'Próximos días',
@@ -334,7 +372,7 @@ async function handleHora(ctx, input, state) {
       // Raro — venimos de handleDia que ya filtró. Fallback: volver a elegir día.
       return {
         messages: [
-          buildText('Justo se ocuparon los horarios de ese día. Elegí otro día.'),
+          buildText('Uy, justo se ocuparon los horarios de ese día. Elegí otro día, así seguimos.'),
         ],
         transition: { to: 'agendar.dia', state },
       };
@@ -350,7 +388,7 @@ async function handleHora(ctx, input, state) {
     return {
       messages: [
         buildList(
-          '¿A qué hora?',
+          'Elegí el horario que mejor te quede:',
           'Ver horarios',
           [{ title: 'Horarios disponibles', rows }],
         ),
@@ -401,7 +439,7 @@ async function handlePacienteConfirmar(ctx, input, state) {
     return {
       messages: [
         buildButtons(
-          `¿La cita es para ${p.nombre}?`,
+          `Para ir más rápido: ¿la cita es para ${p.nombre}?`,
           [
             { id: 'agd.pac.yes', title: 'Sí, soy yo' },
             { id: 'agd.pac.no', title: 'No, otra persona' },
@@ -434,17 +472,21 @@ async function handlePacienteConfirmar(ctx, input, state) {
       };
     }
     if (input.id === 'agd.pac.no') {
+      // "Otra persona" = el paciente NO es el dueño del WhatsApp.
+      // Marcamos registrarForSelf=false para que registrar_paciente NO
+      // haga el early-return con el paciente existente del whatsapp y
+      // NO asocie el whatsapp del contacto al paciente nuevo.
       return {
         messages: [],
         transition: {
           to: useFlowForRegistro() ? 'agendar.registro_flow' : 'agendar.registro.first_name',
-          state,
+          state: { ...state, registrarForSelf: false },
         },
       };
     }
     if (input.id === 'agd.pac.cancel') {
       return {
-        messages: [buildText('Listo, cancelé la reserva. Si querés volver a arrancar, escribí cualquier cosa.')],
+        messages: [buildText('Sin problema, no agendo nada. Cuando quieras volver a intentarlo, escribime y seguimos.')],
         transition: 'end',
       };
     }
@@ -460,7 +502,7 @@ async function handlePacienteConfirmar(ctx, input, state) {
 async function handleRegistroFirstName(ctx, input, state) {
   if (!input) {
     return {
-      messages: [buildText('Dale. ¿Cuál es tu nombre?')],
+      messages: [buildText('Perfecto. Te registro rápidamente así reservamos el turno — ¿cuál es tu nombre?')],
       transition: 'stay',
       state,
     };
@@ -482,7 +524,7 @@ async function handleRegistroFirstName(ctx, input, state) {
 async function handleRegistroLastName(ctx, input, state) {
   if (!input) {
     return {
-      messages: [buildText('¿Tu apellido?')],
+      messages: [buildText('Gracias. ¿Y tu apellido?')],
       transition: 'stay',
       state,
     };
@@ -504,7 +546,7 @@ async function handleRegistroLastName(ctx, input, state) {
 async function handleRegistroBirthDate(ctx, input, state) {
   if (!input) {
     return {
-      messages: [buildText('¿Fecha de nacimiento? Formato DD/MM/AAAA (ej. 12/05/1990).')],
+      messages: [buildText('¿Cuál es tu fecha de nacimiento? Escribila en formato DD/MM/AAAA (por ejemplo 12/05/1990).')],
       transition: 'stay',
       state,
     };
@@ -513,7 +555,7 @@ async function handleRegistroBirthDate(ctx, input, state) {
     const iso = parseBirthDateInput(input.text || '');
     if (!iso) {
       return {
-        messages: [buildText('No pude leer la fecha. Intentá con DD/MM/AAAA (ej. 12/05/1990).')],
+        messages: [buildText('Disculpá, no logré entender la fecha. ¿Podés escribirla así: DD/MM/AAAA? (por ejemplo 12/05/1990)')],
         transition: 'stay',
         state,
       };
@@ -532,7 +574,7 @@ async function handleRegistroBirthDate(ctx, input, state) {
 async function handleRegistroCity(ctx, input, state) {
   if (!input) {
     return {
-      messages: [buildText('¿En qué ciudad vivís? (o escribí "omitir" para saltar)')],
+      messages: [buildText('¿En qué ciudad vivís? Si preferís no decirlo, escribí "omitir".')],
       transition: 'stay',
       state,
     };
@@ -554,7 +596,7 @@ async function handleRegistroCity(ctx, input, state) {
 async function handleRegistroEmail(ctx, input, state) {
   if (!input) {
     return {
-      messages: [buildText('Un email para enviarte recordatorios (opcional — escribí "omitir" para saltar).')],
+      messages: [buildText('Por último, ¿me dejás un email para enviarte los recordatorios? Es opcional — escribí "omitir" si preferís no compartirlo.')],
       transition: 'stay',
       state,
     };
@@ -563,21 +605,23 @@ async function handleRegistroEmail(ctx, input, state) {
     const raw = String(input.text || '').trim();
     const email = /^(omitir|saltar|no|\-)$/i.test(raw) ? null : (raw.includes('@') ? raw.toLowerCase() : null);
 
-    // Registrar paciente con lo capturado
+    // Registrar paciente con lo capturado.
+    // for_self: default true (paciente = dueño del whatsapp). Si el usuario
+    // dijo "No, otra persona" en paciente_confirmar, llega registrarForSelf=false.
     const r = await handlers.registrar_paciente(ctx, {
       first_name: state.registro?.first_name,
       last_name: state.registro?.last_name,
       birth_date: state.registro?.birth_date,
       city: state.registro?.city,
       email: email || undefined,
-      for_self: true,
+      for_self: state.registrarForSelf !== false,
     });
 
     if (r?.error || !r?.paciente?.id) {
       return {
         messages: [
           buildText(
-            'Tuve un problema registrando tus datos. Te paso con recepción para que te ayuden.',
+            'Uy, tuve un inconveniente guardando tus datos. Te paso con recepción para que te ayuden.',
           ),
         ],
         transition: { to: 'escalar.confirmacion', state },
@@ -616,7 +660,7 @@ async function handleRegistroFlow(ctx, input, state) {
     return {
       messages: [
         buildFlow(
-          'Completá tus datos para continuar con la reserva:',
+          'Para terminar de agendarte, te pido unos datos rápidos. Tocá el botón de abajo y lo completás en un toque:',
           {
             flowId,
             flowToken: ctx.conversationId,
@@ -638,13 +682,13 @@ async function handleRegistroFlow(ctx, input, state) {
       birth_date: data.birth_date,
       phone: data.phone || undefined,
       email: data.email || undefined,
-      for_self: true,
+      for_self: state.registrarForSelf !== false,
     });
 
     if (r?.error || !r?.paciente?.id) {
       return {
         messages: [
-          buildText('Tuve un problema registrando tus datos. Te paso con recepción.'),
+          buildText('Uy, tuve un inconveniente guardando tus datos. Te paso con recepción para que te ayuden.'),
         ],
         transition: { to: 'escalar.confirmacion', state },
       };
@@ -674,12 +718,12 @@ async function handleRegistroFlow(ctx, input, state) {
 async function handleConfirmacion(ctx, input, state) {
   if (!input) {
     const resumen =
-      `Revisemos:\n\n` +
+      `Te resumo la cita antes de confirmar:\n\n` +
       `• ${state.appointmentTypeName || 'Cita'}${state.specialtyName ? ` (${state.specialtyName})` : ''}\n` +
       `• Con ${state.providerName || 'el profesional'}\n` +
       `• ${formatShortDateTimeEs(state.startAt, ctx.timezone)}\n` +
       `• Paciente: ${state.patientName || 'vos'}\n\n` +
-      `¿Confirmamos?`;
+      `¿La confirmamos?`;
 
     return {
       messages: [
@@ -709,8 +753,8 @@ async function handleConfirmacion(ctx, input, state) {
     if (r?.error) {
       const msg =
         r.error === 'double_booking'
-          ? 'Justo otra persona tomó ese horario. Arranquemos de cero.'
-          : r.mensaje || 'No pude agendar la cita. Te paso con recepción.';
+          ? 'Uh, justo otra persona reservó ese horario antes. Arranquemos de nuevo para buscarte otro.'
+          : r.mensaje || 'No logré agendar la cita. Te paso con recepción para que te ayuden.';
       if (r.error === 'double_booking') {
         return {
           messages: [buildText(msg)],
@@ -730,7 +774,7 @@ async function handleConfirmacion(ctx, input, state) {
     const msgOk =
       `¡Listo! 🎉 Tu ${nombreCita} quedó agendada para ${r.cita?.cuando || formatShortDateTimeEs(state.startAt, ctx.timezone)} ` +
       `con ${r.cita?.profesional || state.providerName}.\n\n` +
-      `Si necesitás reprogramar o cancelar, escribime y te ayudo.`;
+      `Te vamos a estar esperando. Si más adelante necesitás reprogramar o cancelar, escribime y te ayudo.`;
 
     return {
       messages: [buildText(msgOk)],
@@ -740,7 +784,7 @@ async function handleConfirmacion(ctx, input, state) {
 
   if (input.type === 'button' && input.id === 'agd.conf.no') {
     return {
-      messages: [buildText('Listo, no agendo. Si querés arrancar de nuevo, escribime cualquier cosa.')],
+      messages: [buildText('Sin problema, no agendo nada. Cuando quieras volver a intentarlo, escribime y seguimos.')],
       transition: 'end',
     };
   }

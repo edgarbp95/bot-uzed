@@ -18,7 +18,7 @@ async function handleVerCitas(ctx, _input, state) {
     return {
       messages: [
         buildText(
-          'No tengo citas a tu nombre. Si querés agendar una, escribí "menú" y elegí "Agendar".',
+          'No veo citas registradas a tu nombre. Si querés agendar una, escribí "menú" y elegí "Agendar" — te ayudo.',
         ),
       ],
       transition: 'end',
@@ -28,7 +28,7 @@ async function handleVerCitas(ctx, _input, state) {
   const appts = await listPatientFutureAppointments(ctx, patientId);
   if (appts.length === 0) {
     return {
-      messages: [buildText('No tenés citas futuras registradas.')],
+      messages: [buildText('Por ahora no tenés citas futuras registradas.')],
       transition: 'end',
     };
   }
@@ -43,8 +43,8 @@ async function handleVerCitas(ctx, _input, state) {
   return {
     messages: [
       buildText(
-        `Tus próximas citas:\n\n${lines.join('\n')}\n\n` +
-        'Si querés reprogramar o cancelar alguna, escribí "menú".',
+        `Estas son tus próximas citas:\n\n${lines.join('\n')}\n\n` +
+        'Si necesitás reprogramar o cancelar alguna, escribí "menú" y te ayudo.',
       ),
     ],
     transition: 'end',

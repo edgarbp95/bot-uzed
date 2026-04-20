@@ -22,7 +22,10 @@ const MENU_ID = {
 };
 
 function renderMenu(orgName) {
-  const body = `¡Hola! Soy el asistente de ${orgName || 'la clínica'}. ¿En qué te puedo ayudar?`;
+  const body =
+    `¡Hola! Te saluda el asistente de ${orgName || 'la clínica'}. ` +
+    `Con gusto te ayudo a agendar, reprogramar o cancelar tus citas. ` +
+    `¿Qué necesitás hoy?`;
   return buildList(
     body,
     'Ver opciones',
@@ -31,15 +34,15 @@ function renderMenu(orgName) {
         title: 'Agenda',
         rows: [
           { id: MENU_ID.AGENDAR, title: 'Agendar una cita', description: 'Reservar un nuevo turno' },
-          { id: MENU_ID.REPROGRAMAR, title: 'Reprogramar', description: 'Mover una cita existente' },
+          { id: MENU_ID.REPROGRAMAR, title: 'Reprogramar', description: 'Cambiar día u hora' },
           { id: MENU_ID.CANCELAR, title: 'Cancelar', description: 'Anular una cita' },
-          { id: MENU_ID.VER_CITAS, title: 'Mis citas', description: 'Ver próximas citas' },
+          { id: MENU_ID.VER_CITAS, title: 'Mis citas', description: 'Ver mis próximos turnos' },
         ],
       },
       {
         title: 'Ayuda',
         rows: [
-          { id: MENU_ID.RECEPCION, title: 'Hablar con recepción', description: 'Pasar con una persona' },
+          { id: MENU_ID.RECEPCION, title: 'Hablar con recepción', description: 'Me comunico con una persona' },
         ],
       },
     ],

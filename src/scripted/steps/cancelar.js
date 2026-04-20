@@ -25,7 +25,7 @@ async function handleElegirCita(ctx, input, state) {
     if (!patientId) {
       return {
         messages: [
-          buildText('No tengo citas registradas a tu nombre. Si tenías una, contactá a recepción.'),
+          buildText('No encuentro citas registradas a tu nombre. Si tenías una reservada, te recomiendo contactar a recepción para verificarlo.'),
         ],
         transition: 'end',
       };
@@ -34,7 +34,7 @@ async function handleElegirCita(ctx, input, state) {
     const appts = await listPatientFutureAppointments(ctx, patientId);
     if (appts.length === 0) {
       return {
-        messages: [buildText('No tenés citas futuras por cancelar.')],
+        messages: [buildText('No veo citas futuras pendientes, así que no hay nada que cancelar.')],
         transition: 'end',
       };
     }
@@ -59,7 +59,7 @@ async function handleElegirCita(ctx, input, state) {
     return {
       messages: [
         buildList(
-          '¿Cuál querés cancelar?',
+          'Claro, te ayudo a cancelar. ¿Cuál de estas citas querés anular?',
           'Ver citas',
           [{
             title: 'Mis próximas citas',
@@ -103,7 +103,7 @@ async function handleElegirCita(ctx, input, state) {
 async function handleConfirmacion(ctx, input, state) {
   if (!input) {
     const detalle =
-      `¿Cancelar ${state.tipo || 'la cita'} del ${state.cuando}` +
+      `¿Confirmás que querés cancelar ${state.tipo || 'la cita'} del ${state.cuando}` +
       (state.profesional ? ` con ${state.profesional}` : '') +
       `?`;
     return {
@@ -128,17 +128,17 @@ async function handleConfirmacion(ctx, input, state) {
     });
     if (r?.error) {
       const msg = r.error === 'ya_estaba_cancelada'
-        ? 'Esa cita ya estaba cancelada.'
+        ? 'Esa cita ya figuraba cancelada.'
         : r.error === 'no_autorizado'
-        ? 'No pude verificar que la cita sea tuya.'
-        : 'No pude cancelar la cita. Te paso con recepción.';
+        ? 'No pude verificar que la cita sea tuya. Te paso con recepción.'
+        : 'No logré cancelar la cita. Te paso con recepción para que te ayuden.';
       return {
         messages: [buildText(msg)],
         transition: r.error === 'no_autorizado' ? { to: 'escalar.confirmacion', state } : 'end',
       };
     }
     return {
-      messages: [buildText(`Listo, cancelé la cita del ${state.cuando}.`)],
+      messages: [buildText(`Listo, cancelé tu cita del ${state.cuando}. Si más adelante querés agendar otra, escribime y te ayudo.`)],
       transition: 'end',
     };
   }
