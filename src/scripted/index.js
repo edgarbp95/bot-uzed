@@ -216,7 +216,10 @@ function normalizeIncoming(message) {
 // Escape universal
 // ============================================================
 
-const ESCAPE_WORDS = /^\s*(menu|menú|salir|inicio|start|\/menu|\/salir|volver)\s*$/i;
+// Palabras que llevan siempre al menú principal, sin importar en qué step
+// esté el paciente. Incluye saludos comunes para que si alguien queda
+// pegado en un step roto, con solo escribir "hola" o "buenas" se reinicie.
+const ESCAPE_WORDS = /^\s*(menu|menú|salir|inicio|start|\/menu|\/salir|volver|hola|holaa+|hi|hey|buenas|buenos días|buen día|buenas tardes|buenas noches|empezar|reiniciar|reset|help|ayuda)[.!¡\s]*$/i;
 
 function isEscapeInput(input) {
   return input?.type === 'text' && ESCAPE_WORDS.test(String(input.text || ''));

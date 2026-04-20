@@ -705,7 +705,20 @@ async function handleRegistroFlow(ctx, input, state) {
     };
   }
 
-  // Si el usuario mandó texto en vez de abrir el Flow, re-enviamos el flow.
+  // Si el usuario mandó texto en vez de abrir el Flow (porque el Flow no
+  // llegó / no le apareció el botón / está en borrador / se arrepintió),
+  // caemos al flujo secuencial en vez de seguir re-enviando el Flow roto.
+  // Esto evita que el paciente quede pegado mandando "hola" sin respuesta.
+  if (input?.type === 'text') {
+    return {
+      messages: [
+        buildText('Sin problema, te pido los datos por aquí mismo paso a paso.'),
+      ],
+      transition: { to: 'agendar.registro.first_name', state },
+    };
+  }
+
+  // Cualquier otro tipo (botón, lista de otro lado, etc.) → re-enviamos el Flow.
   return await handleRegistroFlow(ctx, null, state);
 }
 
