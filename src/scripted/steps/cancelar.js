@@ -59,7 +59,7 @@ async function handleElegirCita(ctx, input, state) {
     return {
       messages: [
         buildList(
-          'Claro, te ayudo a cancelar. ¿Cuál de estas citas querés anular?',
+          'Claro, te ayudo a cancelar. ¿Cuál de estas citas quieres anular?',
           'Ver citas',
           [{
             title: 'Mis próximas citas',
@@ -103,7 +103,7 @@ async function handleElegirCita(ctx, input, state) {
 async function handleConfirmacion(ctx, input, state) {
   if (!input) {
     const detalle =
-      `¿Confirmás que querés cancelar ${state.tipo || 'la cita'} del ${state.cuando}` +
+      `¿Confirmas que quieres cancelar ${state.tipo || 'la cita'} del ${state.cuando}` +
       (state.profesional ? ` con ${state.profesional}` : '') +
       `?`;
     return {
@@ -138,7 +138,7 @@ async function handleConfirmacion(ctx, input, state) {
       };
     }
     return {
-      messages: [buildText(`Listo, cancelé tu cita del ${state.cuando}. Si más adelante querés agendar otra, escribime y te ayudo.`)],
+      messages: [buildText(`Listo, cancelé tu cita del ${state.cuando}. Si más adelante quieres agendar otra, escríbeme y te ayudo.`)],
       transition: 'end',
     };
   }

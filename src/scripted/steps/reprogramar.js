@@ -41,7 +41,7 @@ async function handleElegirCita(ctx, input, state) {
         messages: [
           buildText(
             'No encuentro ninguna cita registrada a tu nombre. ' +
-            'Si querés, te ayudo a agendar una — escribí "menú" y elegí "Agendar".',
+            'Si quieres, te ayudo a agendar una — escribe "menú" y elige "Agendar".',
           ),
         ],
         transition: 'end',
@@ -61,7 +61,7 @@ async function handleElegirCita(ctx, input, state) {
         return {
           messages: [
             buildText(
-              'Tus próximas citas son demasiado cercanas para cambiarlas por acá ' +
+              'Tus próximas citas son demasiado cercanas para cambiarlas por aquí ' +
               '(necesitamos al menos 2 horas de anticipación). ' +
               'Te paso con recepción para que te ayuden.',
             ),
@@ -72,8 +72,8 @@ async function handleElegirCita(ctx, input, state) {
       return {
         messages: [
           buildText(
-            'No veo citas futuras a tu nombre. Si querés agendar una, ' +
-            'escribí "menú" y elegí "Agendar una cita".',
+            'No veo citas futuras a tu nombre. Si quieres agendar una, ' +
+            'escribe "menú" y elige "Agendar una cita".',
           ),
         ],
         transition: 'end',
@@ -101,7 +101,7 @@ async function handleElegirCita(ctx, input, state) {
     return {
       messages: [
         buildList(
-          'Claro que sí, te ayudo a reprogramar. ¿Cuál de estas citas querés mover?',
+          'Claro que sí, te ayudo a reprogramar. ¿Cuál de estas citas quieres mover?',
           'Ver citas',
           [{
             title: 'Mis próximas citas',
@@ -155,7 +155,7 @@ async function handleDia(ctx, input, state) {
     const r = await fetchAppointmentBasics(ctx, state.appointmentId);
     if (!r) {
       return {
-        messages: [buildText('Disculpá, no encontré la cita que querías reprogramar. Escribí "menú" y reintentamos, ¿sí?')],
+        messages: [buildText('Disculpa, no encontré la cita que querías reprogramar. Escribe "menú" y lo reintentamos, ¿te parece?')],
         transition: 'end',
       };
     }
@@ -234,7 +234,7 @@ async function handleHora(ctx, input, state) {
 
     if (slots.length === 0) {
       return {
-        messages: [buildText('Uy, se ocuparon los horarios de ese día. Elegí otro, así seguimos.')],
+        messages: [buildText('Qué pena, se ocuparon los horarios de ese día. Elige otro y seguimos.')],
         transition: { to: 'reprogramar.dia', state },
       };
     }
@@ -242,7 +242,7 @@ async function handleHora(ctx, input, state) {
     return {
       messages: [
         buildList(
-          'Elegí el horario que mejor te quede:',
+          '¡Perfecto! Estos son los horarios disponibles para ese día. Elige el que prefieras:',
           'Ver horarios',
           [{
             title: 'Horarios disponibles',
@@ -313,7 +313,7 @@ async function handleConfirmacion(ctx, input, state) {
         muy_cerca: 'La cita original es en menos de 2 horas y no puedo moverla desde acá. Te paso con recepción para que te ayuden.',
         cita_cancelada: 'Esa cita ya figuraba cancelada.',
         no_autorizado: 'No pude verificar que la cita sea tuya. Te paso con recepción.',
-        double_booking: 'Uh, otro paciente tomó ese horario justo antes. Elegí otro, por favor.',
+        double_booking: 'Justo otro paciente tomó ese horario antes. Por favor elige otro y seguimos.',
       };
       const msg = errorMessages[r.error] || r.mensaje || 'No logré reprogramar la cita. Te paso con recepción para que te ayuden.';
 

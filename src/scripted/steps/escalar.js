@@ -21,7 +21,7 @@ async function handleEscalar(ctx, input, state) {
     return {
       messages: [
         buildButtons(
-          '¿Querés que alguien del equipo te atienda por acá? Les aviso y te escriben apenas puedan.',
+          '¿Quieres que alguien del equipo te atienda por aquí? Les aviso y te escriben apenas puedan.',
           [
             { id: 'esc.yes', title: 'Sí, por favor' },
             { id: 'esc.no', title: 'No, gracias' },
@@ -37,7 +37,7 @@ async function handleEscalar(ctx, input, state) {
     const r = await handlers.escalar_a_humano(ctx, {
       motivo: 'Paciente pidió hablar con recepción desde el bot scripted.',
     });
-    const msg = r?.mensaje || 'Listo, ya le avisé al equipo. Te van a escribir por acá apenas estén disponibles. Gracias por tu paciencia.';
+    const msg = r?.mensaje || 'Listo, ya le avisé al equipo. Te van a escribir por aquí apenas estén disponibles. Gracias por tu paciencia.';
     return {
       messages: [buildText(msg)],
       transition: 'end',

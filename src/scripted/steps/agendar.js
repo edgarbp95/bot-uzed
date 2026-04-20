@@ -80,25 +80,18 @@ async function handleEspecialidad(ctx, input, state) {
         transition: { to: 'escalar.confirmacion', state: {} },
       };
     }
-    if (items.length === 1) {
-      const only = items[0];
-      return {
-        messages: [],
-        transition: {
-          to: 'agendar.profesional',
-          state: {
-            ...state,
-            specialtyId: only.id,
-            specialtyName: only.nombre,
-          },
-        },
-      };
-    }
+
+    // Nota: aunque haya una sola especialidad, igual la mostramos.
+    // El paciente necesita ver qué atiende la clínica antes de seguir —
+    // saltarla lo deja confundido ("¿me está agendando de qué?").
+    const bodyText = items.length === 1
+      ? `¡Perfecto! Con gusto te ayudo a agendar tu cita. Atendemos ${items[0].nombre} — tócala para continuar:`
+      : '¡Perfecto! Con gusto te ayudo a agendar tu cita. ¿Para qué especialidad quieres agendar?';
 
     return {
       messages: [
         buildList(
-          'Perfecto, te ayudo a agendar tu cita. ¿Qué especialidad estás buscando?',
+          bodyText,
           'Ver especialidades',
           [{
             title: 'Especialidades',
@@ -171,8 +164,10 @@ async function handleTipo(ctx, input, state) {
     // Header dinámico: si ya elegimos profesional, lo mencionamos para que
     // el paciente tenga contexto de con quién va a ser la cita.
     const bodyText = state.providerName
-      ? `Excelente, con ${state.providerName}. ¿Qué tipo de consulta vas a necesitar?`
-      : '¿Qué tipo de consulta vas a necesitar?';
+      ? (state.providerAutoSelected
+          ? `¡Perfecto! ${state.providerName}${state.specialtyName ? ` (${state.specialtyName})` : ''} tiene disponibilidad para atenderte. ¿Qué tipo de consulta necesitas?`
+          : `¡Excelente! Agendamos con ${state.providerName}. ¿Qué tipo de consulta necesitas?`)
+      : '¿Qué tipo de consulta necesitas?';
 
     return {
       messages: [
@@ -239,9 +234,10 @@ async function handleProfesional(ctx, input, state) {
     }
     if (items.length === 1) {
       // Único profesional: skip silencioso. El header del próximo step
-      // (agendar.tipo) menciona el nombre del profesional, así que el
-      // paciente igual se entera con quién va sin necesidad de un mensaje
-      // extra que sume ruido.
+      // (agendar.tipo) menciona el nombre del profesional con mensaje
+      // cálido ("¡Perfecto! X tiene disponibilidad..."), así que el
+      // paciente se entera con quién va sin sumar un mensaje extra.
+      // Marcamos providerAutoSelected para que el header use el texto largo.
       const only = items[0];
       return {
         messages: [],
@@ -251,6 +247,7 @@ async function handleProfesional(ctx, input, state) {
             ...state,
             providerId: only.id,
             providerName: only.nombre,
+            providerAutoSelected: true,
           },
         },
       };
@@ -259,7 +256,7 @@ async function handleProfesional(ctx, input, state) {
     return {
       messages: [
         buildList(
-          `¿Con qué profesional te gustaría agendar${state.specialtyName ? ` de ${state.specialtyName}` : ''}?`,
+          `¿Con qué profesional prefieres agendar${state.specialtyName ? ` en ${state.specialtyName}` : ''}?`,
           'Ver profesionales',
           [{
             title: 'Profesionales',
@@ -286,6 +283,7 @@ async function handleProfesional(ctx, input, state) {
           ...state,
           providerId: id,
           providerName: input.title || null,
+          providerAutoSelected: false,
         },
       },
     };
@@ -372,7 +370,7 @@ async function handleHora(ctx, input, state) {
       // Raro — venimos de handleDia que ya filtró. Fallback: volver a elegir día.
       return {
         messages: [
-          buildText('Uy, justo se ocuparon los horarios de ese día. Elegí otro día, así seguimos.'),
+          buildText('Qué pena, justo se ocuparon los horarios de ese día. Elige otro y seguimos.'),
         ],
         transition: { to: 'agendar.dia', state },
       };
@@ -388,7 +386,7 @@ async function handleHora(ctx, input, state) {
     return {
       messages: [
         buildList(
-          'Elegí el horario que mejor te quede:',
+          '¡Perfecto! Estos son los horarios disponibles para ese día. Elige el que prefieras y seguimos:',
           'Ver horarios',
           [{ title: 'Horarios disponibles', rows }],
         ),
@@ -486,7 +484,7 @@ async function handlePacienteConfirmar(ctx, input, state) {
     }
     if (input.id === 'agd.pac.cancel') {
       return {
-        messages: [buildText('Sin problema, no agendo nada. Cuando quieras volver a intentarlo, escribime y seguimos.')],
+        messages: [buildText('Sin problema, no agendo nada. Cuando quieras volver a intentarlo, escríbeme y seguimos.')],
         transition: 'end',
       };
     }
@@ -555,7 +553,7 @@ async function handleRegistroBirthDate(ctx, input, state) {
     const iso = parseBirthDateInput(input.text || '');
     if (!iso) {
       return {
-        messages: [buildText('Disculpá, no logré entender la fecha. ¿Podés escribirla así: DD/MM/AAAA? (por ejemplo 12/05/1990)')],
+        messages: [buildText('Disculpa, no logré entender la fecha. ¿Puedes escribirla así: DD/MM/AAAA? (por ejemplo 12/05/1990)')],
         transition: 'stay',
         state,
       };
@@ -574,7 +572,7 @@ async function handleRegistroBirthDate(ctx, input, state) {
 async function handleRegistroCity(ctx, input, state) {
   if (!input) {
     return {
-      messages: [buildText('¿En qué ciudad vivís? Si preferís no decirlo, escribí "omitir".')],
+      messages: [buildText('¿En qué ciudad vives? Si prefieres no decirlo, escribe "omitir".')],
       transition: 'stay',
       state,
     };
@@ -596,7 +594,7 @@ async function handleRegistroCity(ctx, input, state) {
 async function handleRegistroEmail(ctx, input, state) {
   if (!input) {
     return {
-      messages: [buildText('Por último, ¿me dejás un email para enviarte los recordatorios? Es opcional — escribí "omitir" si preferís no compartirlo.')],
+      messages: [buildText('Por último, ¿me dejas un email para enviarte los recordatorios? Es opcional — escribe "omitir" si prefieres no compartirlo.')],
       transition: 'stay',
       state,
     };
@@ -660,7 +658,7 @@ async function handleRegistroFlow(ctx, input, state) {
     return {
       messages: [
         buildFlow(
-          'Para terminar de agendarte, te pido unos datos rápidos. Tocá el botón de abajo y lo completás en un toque:',
+          'Para terminar de agendarte, te pido unos datos rápidos. Toca el botón de abajo y los completas en un momento:',
           {
             flowId,
             flowToken: ctx.conversationId,
@@ -722,7 +720,7 @@ async function handleConfirmacion(ctx, input, state) {
       `• ${state.appointmentTypeName || 'Cita'}${state.specialtyName ? ` (${state.specialtyName})` : ''}\n` +
       `• Con ${state.providerName || 'el profesional'}\n` +
       `• ${formatShortDateTimeEs(state.startAt, ctx.timezone)}\n` +
-      `• Paciente: ${state.patientName || 'vos'}\n\n` +
+      `• Paciente: ${state.patientName || 'tú'}\n\n` +
       `¿La confirmamos?`;
 
     return {
@@ -774,7 +772,7 @@ async function handleConfirmacion(ctx, input, state) {
     const msgOk =
       `¡Listo! 🎉 Tu ${nombreCita} quedó agendada para ${r.cita?.cuando || formatShortDateTimeEs(state.startAt, ctx.timezone)} ` +
       `con ${r.cita?.profesional || state.providerName}.\n\n` +
-      `Te vamos a estar esperando. Si más adelante necesitás reprogramar o cancelar, escribime y te ayudo.`;
+      `Te estaremos esperando. Si más adelante necesitas reprogramar o cancelar, escríbeme y te ayudo.`;
 
     return {
       messages: [buildText(msgOk)],
@@ -784,7 +782,7 @@ async function handleConfirmacion(ctx, input, state) {
 
   if (input.type === 'button' && input.id === 'agd.conf.no') {
     return {
-      messages: [buildText('Sin problema, no agendo nada. Cuando quieras volver a intentarlo, escribime y seguimos.')],
+      messages: [buildText('Sin problema, no agendo nada. Cuando quieras volver a intentarlo, escríbeme y seguimos.')],
       transition: 'end',
     };
   }

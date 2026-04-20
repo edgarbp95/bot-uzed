@@ -23,9 +23,9 @@ const MENU_ID = {
 
 function renderMenu(orgName) {
   const body =
-    `¡Hola! Te saluda el asistente de ${orgName || 'la clínica'}. ` +
-    `Con gusto te ayudo a agendar, reprogramar o cancelar tus citas. ` +
-    `¿Qué necesitás hoy?`;
+    `¡Hola! Te saluda el asistente virtual de ${orgName || 'la clínica'}. ` +
+    `Con mucho gusto te ayudo a agendar, reprogramar o cancelar tus citas. ` +
+    `¿En qué puedo ayudarte hoy?`;
   return buildList(
     body,
     'Ver opciones',
