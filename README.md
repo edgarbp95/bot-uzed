@@ -42,15 +42,57 @@ Paciente → WhatsApp → Meta Cloud API → POST /webhook (bot-uzed)
 
 ```
 bot-uzed/
-├─ server.js              # Fastify + webhook Meta
+├─ server.js                    # Fastify + webhook Meta
 ├─ src/
-│  ├─ agent.js            # Orquestador multi-tenant + agent loop
-│  ├─ tools.js            # 10 tools scoped por organization_id
-│  ├─ whatsapp.js         # Cliente HTTP WA Cloud API (multi-tenant)
-│  └─ supabase.js         # Supabase client (service_role)
-├─ .env.example           # Template de variables
-├─ .env                   # Variables reales (no commitear)
+│  ├─ route.js                  # Dispatcher: lee org_settings.whatsapp_bot_mode
+│  ├─ agent.js                  # Bot IA (mode='ai') — LLM + tools
+│  ├─ tools.js                  # Tools scoped por organization_id (IA y scripted)
+│  ├─ whatsapp.js               # Cliente HTTP WA Cloud API (multi-tenant)
+│  ├─ supabase.js               # Supabase client (service_role)
+│  └─ scripted/                 # Bot guiado (mode='scripted') — sin LLM
+│     ├─ index.js               # Entry point + dispatcher de pasos
+│     ├─ lib.js                 # Helpers de disponibilidad / pacientes
+│     ├─ messages.js            # Builders de text/buttons/list/flow
+│     ├─ state.js               # Persistencia scripted_step/scripted_state
+│     └─ steps/                 # Handlers por paso (menu, agendar, …)
+├─ docs/flows/                  # WhatsApp Flows estáticos (opcionales)
+│  └─ registro_paciente.json    # Mini-form de datos del paciente
+├─ .env.example                 # Template de variables
+├─ .env                         # Variables reales (no commitear)
 └─ package.json
+```
+
+## Modos del bot (`org_settings.whatsapp_bot_mode`)
+
+Cada organización decide desde su panel cómo responde el bot a los
+mensajes entrantes:
+
+| Mode | Comportamiento |
+|---|---|
+| `ai` (default) | Bot conversacional con LLM (Gemini/Claude). Plan **pago**. |
+| `scripted` | Bot guiado con menú + botones + list messages. Plan **gratis**. |
+| `hybrid` | Reservado para más adelante (actualmente cae a `ai`). |
+| `off` | El bot no responde. Los inbounds se guardan para que el staff los atienda manualmente. |
+
+El dispatcher (`src/route.js`) cachea el mode por canal 30s para evitar
+queries repetidas. Para alternar rápido durante pruebas:
+
+```sql
+UPDATE public.org_settings
+   SET whatsapp_bot_mode = 'scripted'  -- o 'ai' | 'hybrid' | 'off'
+ WHERE org_id = '<uuid>';
+```
+
+### Flow opt-in para registro (solo `scripted`)
+
+El step de registro de paciente acepta datos por mensajes secuenciales
+(default) o vía un mini-form nativo (WhatsApp Flow estático). Para
+habilitar el Flow: publicar `docs/flows/registro_paciente.json` en
+WhatsApp Manager (ver `docs/flows/README.md`) y setear en `.env`:
+
+```env
+WHATSAPP_USE_FLOW_REGISTRO=true
+WHATSAPP_FLOW_REGISTRO_ID=<id devuelto por Meta>
 ```
 
 ## Tools disponibles (espejo de la app Angular)

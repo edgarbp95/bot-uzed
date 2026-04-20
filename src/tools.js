@@ -1486,7 +1486,14 @@ module.exports = {
   tools,
   geminiTools,
   executeTool,
-  // expuestos para tests/debug
+  // `handlers` se expone para que el bot scripted (src/scripted) pueda
+  // invocar las tools directamente sin pasar por el loop LLM. Cada handler
+  // sigue teniendo su propio logging in-DB vía executeTool cuando se lo
+  // llama por ese camino; si el scripted llama al handler directo, no loggea
+  // (ok — el tool cache in-memory sigue funcionando porque está wrapped en
+  // el objeto handlers mismo).
+  handlers,
+  // expuestos para tests/debug y para composición desde src/lib/scripted-helpers.js
   _internal: {
     dayOfWeekInTz,
     isoFromLocalInTz,

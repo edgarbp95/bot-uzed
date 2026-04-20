@@ -1,0 +1,72 @@
+{
+  "version": "7.2",
+  "screens": [
+    {
+      "id": "DATOS_PACIENTE",
+      "title": "Datos del paciente",
+      "terminal": true,
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextSubheading",
+            "text": "Completá tus datos para continuar con la reserva."
+          },
+          {
+            "type": "TextInput",
+            "name": "first_name",
+            "label": "Nombre",
+            "input-type": "text",
+            "required": true,
+            "max-chars": 60
+          },
+          {
+            "type": "TextInput",
+            "name": "last_name",
+            "label": "Apellido",
+            "input-type": "text",
+            "required": true,
+            "max-chars": 60
+          },
+          {
+            "type": "DatePicker",
+            "name": "birth_date",
+            "label": "Fecha de nacimiento",
+            "required": true,
+            "min-date": "1900-01-01"
+          },
+          {
+            "type": "TextInput",
+            "name": "phone",
+            "label": "Teléfono de contacto",
+            "input-type": "phone",
+            "required": false,
+            "max-chars": 20
+          },
+          {
+            "type": "TextInput",
+            "name": "email",
+            "label": "Email",
+            "input-type": "email",
+            "required": false,
+            "max-chars": 120
+          },
+          {
+            "type": "Footer",
+            "label": "Enviar",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "first_name": "${form.first_name}",
+                "last_name": "${form.last_name}",
+                "birth_date": "${form.birth_date}",
+                "phone": "${form.phone}",
+                "email": "${form.email}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -49,6 +49,47 @@ async function sendMessage({ phoneNumberId, accessToken, to, text }) {
   return response.json();
 }
 
+/**
+ * Envía un mensaje interactive (reply buttons, list, flow).
+ * `interactive` es el objeto ya armado por los builders del bot scripted
+ * (src/scripted/messages.js). Ejemplos:
+ *
+ *   { type: 'button', body: {...}, action: { buttons: [...] } }
+ *   { type: 'list',   body: {...}, action: { button: '...', sections: [...] } }
+ *   { type: 'flow',   body: {...}, action: { name: 'flow', parameters: {...} } }
+ *
+ * Si la request falla (400/500), lanza el error al caller — el bot scripted
+ * decide si cae a un fallback de texto o escalate.
+ */
+async function sendInteractive({ phoneNumberId, accessToken, to, interactive }) {
+  const creds = resolveCreds({ phoneNumberId, accessToken });
+  if (!creds.phoneNumberId || !creds.accessToken) {
+    throw new Error('WhatsApp creds missing (phone_number_id / access_token)');
+  }
+
+  const url = `${WHATSAPP_API_URL}/${creds.phoneNumberId}/messages`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${creds.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'interactive',
+      interactive,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`WhatsApp API error ${response.status}: ${errorText}`);
+  }
+  return response.json();
+}
+
 async function markAsRead({ phoneNumberId, accessToken, messageId }) {
   if (!messageId) return;
   const creds = resolveCreds({ phoneNumberId, accessToken });
@@ -100,4 +141,4 @@ function verifyWebhookSignature(rawBody, signatureHeader, appSecretOverride) {
   }
 }
 
-module.exports = { sendMessage, markAsRead, verifyWebhookSignature };
+module.exports = { sendMessage, sendInteractive, markAsRead, verifyWebhookSignature };

@@ -2,8 +2,8 @@
 
 require('dotenv').config();
 const Fastify = require('fastify');
-const { handleIncomingMessage } = require('./src/agent');
-const { sendMessage, verifyWebhookSignature } = require('./src/whatsapp');
+const { routeIncomingMessage } = require('./src/route');
+const { verifyWebhookSignature } = require('./src/whatsapp');
 const {
   validateJwt,
   handleStaffSend,
@@ -110,27 +110,20 @@ fastify.post('/webhook', async (request, reply) => {
             const contact = contacts.find((c) => c.wa_id === message.from) || {};
             const profileName = contact.profile?.name;
 
-            if (message.type === 'text') {
-              await handleIncomingMessage({
+            // El router decide según org_settings.whatsapp_bot_mode
+            // ('ai' | 'scripted' | 'hybrid' | 'off') a qué handler despachar.
+            // El handler es responsable de manejar tipos no soportados.
+            try {
+              await routeIncomingMessage({
                 phoneNumberId,
                 from: message.from,
-                text: message.text.body,
+                message,
                 messageId: message.id,
                 profileName,
                 accessToken,
               });
-            } else {
-              // Multimedia aún no soportado — responder amablemente
-              try {
-                await sendMessage({
-                  phoneNumberId,
-                  accessToken,
-                  to: message.from,
-                  text: 'Por ahora solo puedo procesar mensajes de texto. ¿Me cuentas en palabras en qué te puedo ayudar?',
-                });
-              } catch (e) {
-                fastify.log.error({ err: e }, 'Failed to send unsupported-type reply');
-              }
+            } catch (e) {
+              fastify.log.error({ err: e, messageId: message.id }, 'routeIncomingMessage failed');
             }
           }
         }
