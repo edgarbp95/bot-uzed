@@ -10,6 +10,9 @@
  *   4. Envía el mensaje via WhatsApp Cloud API
  *   5. Guarda en whatsapp_messages con author='staff'
  *   6. Actualiza last_message_at + preview (y unread_count NO — es outbound)
+ *   7. AUTO-HANDOFF: si la conversación estaba en 'bot_active' cuando staff
+ *      escribe, la pasamos a 'human_handoff' para que el bot deje de
+ *      responder. Staff puede devolverla al bot con POST /staff/set-status.
  *
  * Seguridad: el token de WhatsApp NUNCA sale del servidor. El panel solo
  * pasa un JWT firmado por Supabase, que validamos con supabase.auth.getUser(jwt).
@@ -155,24 +158,49 @@ async function handleStaffSend({ user, conversationId, text }) {
     return { ok: false, status: 500, error: 'db_insert_failed' };
   }
 
-  // Actualizar preview + last_message_at
+  // Actualizar preview + last_message_at.
+  // Auto-handoff: si la conversación estaba con el bot activo y staff escribe,
+  // asumimos que staff quiere tomar el control y la pasamos a 'human_handoff'
+  // para que el bot deje de responder al próximo mensaje del paciente.
+  const convUpdate = {
+    last_message_at: new Date().toISOString(),
+    last_message_preview: text.trim().slice(0, 200),
+  };
+  const wasBotActive = conv.status === 'bot_active';
+  if (wasBotActive) {
+    convUpdate.status = 'human_handoff';
+  }
   await supabase
     .from('whatsapp_conversations')
-    .update({
-      last_message_at: new Date().toISOString(),
-      last_message_preview: text.trim().slice(0, 200),
-    })
+    .update(convUpdate)
     .eq('id', conv.id);
 
-  return { ok: true, status: 200, data: { message: inserted } };
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      message: inserted,
+      // Señal para el frontend de que se disparó auto-handoff
+      // (útil si quieren mostrar un toast "Tomaste el control de la conversación").
+      auto_handoff: wasBotActive,
+    },
+  };
 }
 
 /**
- * Endpoint POST /staff/takeover — pone la conversación en human_handoff
- * o la devuelve al bot. Body: { conversation_id, status: 'human_handoff' | 'active' }
+ * Endpoint POST /staff/set-status — cambia el estado de la conversación.
+ * Body: { conversation_id, status: 'bot_active' | 'human_handoff' | 'closed' }
+ *
+ * - 'bot_active'     → el bot vuelve a responder (devolver al bot)
+ * - 'human_handoff'  → solo staff responde, bot queda callado
+ * - 'closed'         → conversación cerrada, se resetea unread_count
+ *
+ * Valores válidos deben coincidir con el CHECK constraint de la DB:
+ *   CHECK (status IN ('bot_active','human_handoff','closed'))
+ * (ver supabase/migrations/20260418030000_whatsapp_channels_and_inbox.sql)
  */
 async function handleStaffSetStatus({ user, conversationId, status }) {
-  if (!['human_handoff', 'active', 'closed'].includes(status)) {
+  if (!['human_handoff', 'bot_active', 'closed'].includes(status)) {
     return { ok: false, status: 400, error: 'invalid_status' };
   }
 
@@ -182,12 +210,16 @@ async function handleStaffSetStatus({ user, conversationId, status }) {
   const isMember = await isMemberOfOrg(user.id, conv.organization_id);
   if (!isMember) return { ok: false, status: 403, error: 'not_a_member' };
 
+  // Al cerrar, reseteamos unread_count. En los demás casos lo dejamos como está.
+  const update = { status };
+  if (status === 'closed') {
+    update.unread_count = 0;
+    update.closed_at = new Date().toISOString();
+  }
+
   const { data, error } = await supabase
     .from('whatsapp_conversations')
-    .update({
-      status,
-      unread_count: status === 'active' || status === 'human_handoff' ? undefined : 0,
-    })
+    .update(update)
     .eq('id', conversationId)
     .select('id, status')
     .single();
